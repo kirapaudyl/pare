@@ -9,6 +9,9 @@ export const DEFAULT_DOMAINS: Domain[] = [
   { id: 'personal', name: 'Personal', color: '#D6336C' },
 ];
 
+// Add this export right below DEFAULT_DOMAINS:
+export const DOMAINS = DEFAULT_DOMAINS;
+
 export const DOMAIN_PALETTE = [
   '#4F46E5', '#0F9D6B', '#E08A00', '#D6336C',
   '#8B5CF6', '#EC4899', '#06B6D4', '#F59E0B',
@@ -20,7 +23,7 @@ export const dayKey = (d: Date | string | number = new Date()): string => {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 };
 
-const daysAgo = (n: number, hour = 10): string => {
+export const daysAgo = (n: number, hour = 10): string => {
   const d = new Date();
   d.setDate(d.getDate() - n);
   d.setHours(hour, 0, 0, 0);
@@ -39,7 +42,7 @@ export function buildSeed() {
     id, title, domainId, status, dateAdded: daysAgo(ago), isFromYesterday: false,
   });
 
-  const tasks: Task[] = [
+   const tasks: Task[] = [
     t('t1', 'Finish module 3 of Google Data Analytics', 'career', 'pending', 1),
     t('t2', 'Draft process flow diagram for dispatch handover', 'career', 'pending', 0),
     t('t3', 'Practice 5 SQL JOIN problems', 'career', 'completed', 2),
