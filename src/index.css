@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body { @apply bg-paper font-sans text-ink antialiased; }
+  :focus-visible { @apply outline outline-2 outline-offset-2 outline-career; }
+}
+
+@keyframes dashflow { to { stroke-dashoffset: -24; } }
+.dash-flow { animation: dashflow 1.6s linear infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-flow { animation: none; }
+}
