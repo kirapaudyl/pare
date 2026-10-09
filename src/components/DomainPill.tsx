@@ -1,4 +1,4 @@
-import DOMAINS from '../store/seed';
+import { DOMAINS } from '../store/seed';
 import type { DomainId } from '../types';
 
 export default function DomainPill({ domainId }: { domainId: DomainId }) {
