@@ -1,19 +1,19 @@
 import { useMemo, useState } from 'react';
 import { ExternalLink, Plus, Trash2 } from 'lucide-react';
 import { useBrainStore } from '../store/useBrainStore';
-import { DOMAINS } from '../store/seed';
 import type { DomainId } from '../types';
 import DomainPill from './DomainPill';
 
 export default function Resources() {
   const resources = useBrainStore((s) => s.resources);
   const addResource = useBrainStore((s) => s.addResource);
+  const domains = useBrainStore((s) => s.domains);
   const removeResource = useBrainStore((s) => s.removeResource);
 
   const [filter, setFilter] = useState<DomainId | 'all'>('all');
   const [query, setQuery] = useState('');
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ title: '', platform: '', url: '', domainId: 'career' as DomainId });
+  const [form, setForm] = useState({ title: '', platform: '', url: '', domainId: (domains[0]?.id ?? '') as DomainId });
 
   const visible = useMemo(
     () =>
@@ -40,7 +40,7 @@ export default function Resources() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-2" role="group" aria-label="Filter by domain">
-          {[{ id: 'all' as const, name: 'All', color: '#12141F' }, ...DOMAINS].map((d) => {
+          {[{ id: 'all' as const, name: 'All', color: '#12141F' }, ...domains].map((d) => {
             const active = filter === d.id;
             return (
               <button
@@ -68,7 +68,7 @@ export default function Resources() {
           <input className={field} placeholder="Platform (e.g. YouTube)" aria-label="Platform" value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })} />
           <input className={field} placeholder="Link" aria-label="Link" value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
           <select className={field} aria-label="Domain" value={form.domainId} onChange={(e) => setForm({ ...form, domainId: e.target.value as DomainId })}>
-            {DOMAINS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            {domains.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
           <button onClick={save} disabled={!canSave} className="h-10 rounded-lg bg-ink text-sm font-semibold text-white disabled:opacity-30">Save resource</button>
         </div>

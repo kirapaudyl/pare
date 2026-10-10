@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useBrainStore } from '../store/useBrainStore';
-import { DOMAINS } from '../store/seed';
 import type { DomainId } from '../types';
 import { guessDomain } from './TaskList';
 
 export default function ThoughtInput() {
   const addTask = useBrainStore((s) => s.addTask);
+  const domains = useBrainStore((s) => s.domains);
   const [text, setText] = useState('');
   const [picked, setPicked] = useState<DomainId | null>(null);
-  const domain: DomainId = picked ?? guessDomain(text) ?? 'career';
+  const domain: DomainId = picked ?? guessDomain(text, domains) ?? domains[0]?.id ?? '';
 
   const submit = () => {
     if (!text.trim()) return;
@@ -45,7 +45,7 @@ export default function ThoughtInput() {
       <fieldset className="mt-4">
         <legend className="mb-2 text-sm font-semibold">Domain</legend>
         <div className="flex flex-wrap gap-2">
-          {DOMAINS.map((d) => {
+          {domains.map((d) => {
             const active = d.id === domain;
             return (
               <button
@@ -61,7 +61,7 @@ export default function ThoughtInput() {
             );
           })}
         </div>
-        {!picked && text.trim() && guessDomain(text) && (
+        {!picked && text.trim() && guessDomain(text, domains) && (
           <p className="mt-2 text-xs text-muted">Domain picked from your wording. Tap another to override.</p>
         )}
       </fieldset>

@@ -2,20 +2,23 @@ import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { CornerUpRight, Trash2 } from 'lucide-react';
 import { useBrainStore } from '../store/useBrainStore';
-import { DOMAINS } from '../store/seed';
-import type { DomainId, Task } from '../types';
+import type { Domain, DomainId, Task } from '../types';
 import DomainPill from './DomainPill';
 
-const KEYWORDS: Record<DomainId, string[]> = {
+const KEYWORDS: Record<string, string[]> = {
   career: ['sql', 'work', 'client', 'report', 'dashboard', 'course', 'resume', 'interview', 'meeting', 'project', 'tracker'],
   money: ['pay', 'budget', 'invoice', 'save', 'saving', 'invest', 'tax', 'bill', 'loan', 'salary', 'rent', 'fund'],
   curiosity: ['read', 'learn', 'book', 'podcast', 'research', 'explore', 'paper', 'video', 'watch'],
   personal: ['gym', 'family', 'call', 'health', 'sleep', 'walk', 'friend', 'cook', 'clean', 'meal'],
 };
 
-export function guessDomain(text: string): DomainId | null {
+export function guessDomain(text: string, domains: Domain[]): DomainId | null {
   const lower = text.toLowerCase();
-  for (const d of DOMAINS) if (KEYWORDS[d.id].some((k) => lower.includes(k))) return d.id;
+  for (const d of domains) {
+    // Built-in domains have keyword lists; custom ones match on words from their own name.
+    const words = KEYWORDS[d.id] ?? d.name.toLowerCase().split(/\W+/).filter((w) => w.length > 3);
+    if (words.some((k) => lower.includes(k))) return d.id;
+  }
   return null;
 }
 
