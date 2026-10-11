@@ -6,9 +6,9 @@ import Resources from './components/Resources';
 import QuickDump from './components/QuickDump';
 import Auth from './components/Auth';
 import SetupNotice from './components/SetupNotice';
-import LegacyImportDialog from './components/LegacyImportDialog';
 import { isSupabaseConfigured } from './lib/supabase';
-import { countLegacyItems, readLegacy, resolveLegacyItems, useBrainStore, useStreak, type LegacySelection } from './store/useBrainStore';
+import LegacyImport from './components/LegacyImport';
+import { useBrainStore, useStreak } from './store/useBrainStore';
 
 type View = 'dashboard' | 'journal' | 'resources';
 
@@ -48,58 +48,6 @@ function LoadError() {
 function Banners() {
   const syncError = useBrainStore((s) => s.syncError);
   const dismiss = useBrainStore((s) => s.dismissSyncError);
-  const importLegacy = useBrainStore((s) => s.importLegacy);
-  const tasks = useBrainStore((s) => s.tasks);
-  const journal = useBrainStore((s) => s.journal);
-  const resources = useBrainStore((s) => s.resources);
-  const [busy, setBusy] = useState(false);
-  const [reviewOpen, setReviewOpen] = useState(false);
-  const [, setLegacyRevision] = useState(0);
-
-  // If an old record is already in Supabase, remember that it was migrated.
-  // This prevents it reappearing in the legacy prompt after the user later deletes it.
-  useEffect(() => {
-    const legacy = readLegacy();
-    if (!legacy) return;
-    const alreadyPresent: LegacySelection = {
-      tasks: (legacy.tasks ?? []).filter((old) => tasks.some((current) => current.id === old.id)),
-      journal: (legacy.journal ?? []).filter((old) => journal.some((current) => current.id === old.id)),
-      resources: (legacy.resources ?? []).filter((old) => resources.some((current) => current.id === old.id)),
-    };
-    if (countLegacyItems(alreadyPresent) > 0 && resolveLegacyItems(alreadyPresent, true) > 0) {
-      setLegacyRevision((revision) => revision + 1);
-    }
-  }, [tasks, journal, resources]);
-
-  const rawLegacy = readLegacy();
-  const taskIds = new Set(tasks.map((item) => item.id));
-  const journalIds = new Set(journal.map((item) => item.id));
-  const resourceIds = new Set(resources.map((item) => item.id));
-  const missingLegacy = rawLegacy ? {
-    ...rawLegacy,
-    tasks: (rawLegacy.tasks ?? []).filter((item) => !taskIds.has(item.id)),
-    journal: (rawLegacy.journal ?? []).filter((item) => !journalIds.has(item.id)),
-    resources: (rawLegacy.resources ?? []).filter((item) => !resourceIds.has(item.id)),
-  } : null;
-  const missing = countLegacyItems(missingLegacy);
-
-  const handleImport = async (selection: LegacySelection) => {
-    setBusy(true);
-    try {
-      const imported = await importLegacy(selection);
-      if (imported > 0) setReviewOpen(false);
-      setLegacyRevision((revision) => revision + 1);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDiscard = (selection: LegacySelection) => {
-    resolveLegacyItems(selection, true);
-    setReviewOpen(false);
-    setLegacyRevision((revision) => revision + 1);
-  };
-
   return (
     <>
       {syncError && (
@@ -108,26 +56,7 @@ function Banners() {
           <button onClick={dismiss} aria-label="Dismiss" className="shrink-0"><X size={16} /></button>
         </div>
       )}
-      {missing > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-card px-5 py-2.5 text-sm shadow-lift">
-          <span>This browser has {missing} unreviewed item{missing === 1 ? '' : 's'} saved from before Supabase.</span>
-          <button
-            onClick={() => setReviewOpen(true)}
-            className="h-9 rounded-lg bg-ink px-4 font-semibold text-white transition-colors hover:bg-ink/90"
-          >
-            Review {missing} item{missing === 1 ? '' : 's'}
-          </button>
-        </div>
-      )}
-      {reviewOpen && missingLegacy && (
-        <LegacyImportDialog
-          legacy={missingLegacy}
-          busy={busy}
-          onClose={() => setReviewOpen(false)}
-          onImport={handleImport}
-          onDiscard={handleDiscard}
-        />
-      )}
+      <LegacyImport />
     </>
   );
 }

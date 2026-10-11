@@ -12,59 +12,22 @@ interface ResourceRow { id: string; title: string; platform: string; url: string
 interface JournalRow { id: string; title: string | null; content: string; created_at: string }
 
 export const LEGACY_KEY = 'orbit-brain-v1'; // old zustand/localStorage key from before Supabase
-const LEGACY_RESOLVED_KEY = 'pare-legacy-resolved-v1';
+const DISMISSED_KEY = 'pare-legacy-dismissed'; // legacy items the user discarded, imported, or deleted
 
-export type LegacySelection = Partial<Pick<BrainData, 'tasks' | 'resources' | 'journal'>>;
-export type LegacyData = Partial<Writable>;
+export type LegacyKind = 't' | 'j' | 'r'; // task, journal entry, resource
+export const legacyKey = (k: LegacyKind, id: string) => `${k}:${id}`;
 
-function getResolvedLegacyKeys(): Set<string> {
+const readDismissed = (): string[] => {
   try {
-    const raw = localStorage.getItem(LEGACY_RESOLVED_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []);
+    const v = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? '[]');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   } catch {
-    return new Set();
+    return [];
   }
-}
-
-/** Remember resolved IDs; optionally remove the corresponding legacy copies too. */
-export function resolveLegacyItems(items: LegacySelection, removeFromLegacy = false): number {
-  try {
-    const resolved = getResolvedLegacyKeys();
-    const before = resolved.size;
-    const taskIds = new Set((items.tasks ?? []).map((item) => item.id));
-    const journalIds = new Set((items.journal ?? []).map((item) => item.id));
-    const resourceIds = new Set((items.resources ?? []).map((item) => item.id));
-    for (const id of taskIds) resolved.add(`task:${id}`);
-    for (const id of journalIds) resolved.add(`journal:${id}`);
-    for (const id of resourceIds) resolved.add(`resource:${id}`);
-    if (resolved.size !== before) localStorage.setItem(LEGACY_RESOLVED_KEY, JSON.stringify([...resolved]));
-
-    if (removeFromLegacy && (taskIds.size + journalIds.size + resourceIds.size > 0)) {
-      const raw = localStorage.getItem(LEGACY_KEY);
-      const parsed = raw ? JSON.parse(raw) : null;
-      const state = parsed?.state;
-      if (state) {
-        localStorage.setItem(LEGACY_KEY, JSON.stringify({
-          ...parsed,
-          state: {
-            ...state,
-            tasks: Array.isArray(state.tasks) ? state.tasks.filter((item: Task) => !taskIds.has(item.id)) : state.tasks,
-            journal: Array.isArray(state.journal) ? state.journal.filter((item: JournalEntry) => !journalIds.has(item.id)) : state.journal,
-            resources: Array.isArray(state.resources) ? state.resources.filter((item: Resource) => !resourceIds.has(item.id)) : state.resources,
-          },
-        }));
-      }
-    }
-    return resolved.size - before;
-  } catch {
-    return 0;
-  }
-}
-
-export function countLegacyItems(items: LegacySelection | null | undefined): number {
-  return (items?.tasks?.length ?? 0) + (items?.journal?.length ?? 0) + (items?.resources?.length ?? 0);
-}
+};
+const writeDismissed = (keys: string[]) => {
+  try { localStorage.setItem(DISMISSED_KEY, JSON.stringify(keys)); } catch { /* storage full or blocked: not critical */ }
+};
 
 /* A pending task from an earlier day is "carried over". Derived, never stored. */
 const isCarriedOver = (status: Task['status'], dateAdded: string) =>
@@ -95,7 +58,9 @@ interface BrainState extends BrainData {
   init: () => () => void;
   signOut: () => Promise<void>;
   load: () => Promise<void>;
-  importLegacy: (selection?: LegacySelection) => Promise<number>;
+  dismissedLegacy: string[];
+  dismissLegacy: (keys: string[]) => void;
+  importLegacyItems: (keys: string[]) => Promise<number>;
 
   addDomain: (name: string, color?: string) => void;
   deleteDomain: (id: string) => void;
@@ -110,21 +75,14 @@ interface BrainState extends BrainData {
 }
 
 /* ---------- legacy localStorage import ---------- */
-export function readLegacy(): LegacyData | null {
+export function readLegacy(): Partial<Writable> | null {
   try {
     const raw = localStorage.getItem(LEGACY_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw)?.state;
     if (!s) return null;
-    const resolved = getResolvedLegacyKeys();
-    const pending: LegacyData = {
-      domains: Array.isArray(s.domains) ? s.domains : undefined,
-      activityDays: Array.isArray(s.activityDays) ? s.activityDays : undefined,
-      tasks: Array.isArray(s.tasks) ? s.tasks.filter((x: Task) => !resolved.has(`task:${x.id}`)) : [],
-      journal: Array.isArray(s.journal) ? s.journal.filter((x: JournalEntry) => !resolved.has(`journal:${x.id}`)) : [],
-      resources: Array.isArray(s.resources) ? s.resources.filter((x: Resource) => !resolved.has(`resource:${x.id}`)) : [],
-    };
-    return countLegacyItems(pending) > 0 ? pending : null;
+    const hasData = (s.tasks?.length ?? 0) + (s.journal?.length ?? 0) + (s.resources?.length ?? 0) > 0;
+    return hasData ? (s as Partial<Writable>) : null;
   } catch {
     return null;
   }
@@ -179,6 +137,15 @@ export const useBrainStore = create<BrainState>()((set, get) => {
     }
   };
 
+  /** A deleted item must never come back through the "old data" list. */
+  const dismissIfLegacy = (kind: LegacyKind, ids: string[]) => {
+    const l = readLegacy();
+    if (!l) return;
+    const list = (kind === 't' ? l.tasks : kind === 'j' ? l.journal : l.resources) as { id: string }[] | undefined;
+    const hit = ids.filter((id) => list?.some((x) => x.id === id));
+    if (hit.length) get().dismissLegacy(hit.map((id) => legacyKey(kind, id)));
+  };
+
   const markActive = (s: BrainState): Pick<BrainState, 'activityDays'> => {
     const today = dayKey();
     return { activityDays: s.activityDays.includes(today) ? s.activityDays : [...s.activityDays, today] };
@@ -213,10 +180,7 @@ export const useBrainStore = create<BrainState>()((set, get) => {
       if (error) throw error;
       if ((count ?? 0) === 0) {
         // Brand-new account: bring over this browser's old data if it has any, otherwise start from the demo seed.
-        const legacy = readLegacy();
-        const initialData = legacy ?? buildSeed();
-        await insertAll(session.user.id, initialData);
-        if (legacy) resolveLegacyItems(legacy, true);
+        await insertAll(session.user.id, readLegacy() ?? buildSeed());
       }
       await get().load();
     } catch (e) {
@@ -226,7 +190,7 @@ export const useBrainStore = create<BrainState>()((set, get) => {
 
   return {
     domains: [], tasks: [], resources: [], journal: [], activityDays: [],
-    status: 'loading', userId: null, email: null, syncError: null,
+    status: 'loading', userId: null, email: null, syncError: null, dismissedLegacy: readDismissed(),
     dismissSyncError: () => set({ syncError: null }),
 
     init: () => {
@@ -283,34 +247,45 @@ export const useBrainStore = create<BrainState>()((set, get) => {
       }
     },
 
-    /** Import selected old records. Only records successfully imported are marked resolved. */
-    importLegacy: async (selection) => {
-      const userId = get().userId;
+    dismissLegacy: (keys) =>
+      set((s) => {
+        const merged = [...new Set([...s.dismissedLegacy, ...keys])];
+        writeDismissed(merged);
+        return { dismissedLegacy: merged };
+      }),
+
+    /** Import only the chosen old items. Items whose domain no longer exists are skipped. Never overwrites. */
+    importLegacyItems: async (keys) => {
+      const { userId, domains } = get();
       const legacy = readLegacy();
       if (!userId || !legacy) return 0;
-      const chosen: LegacySelection = selection ?? {
-        tasks: legacy.tasks ?? [],
-        journal: legacy.journal ?? [],
-        resources: legacy.resources ?? [],
-      };
-      const count = countLegacyItems(chosen);
-      if (count === 0) return 0;
+      const want = new Set(keys);
+      const okDomain = new Set(domains.map((d) => d.id));
+      const tasks = (legacy.tasks ?? []).filter((t) => want.has(legacyKey('t', t.id)) && okDomain.has(t.domainId));
+      const journal = (legacy.journal ?? []).filter((j) => want.has(legacyKey('j', j.id)));
+      const resources = (legacy.resources ?? []).filter((r) => want.has(legacyKey('r', r.id)) && okDomain.has(r.domainId));
       try {
-        // Domains and activity history are metadata required to keep selected records usable.
-        await insertAll(userId, {
-          domains: legacy.domains?.length ? legacy.domains : DEFAULT_DOMAINS,
-          activityDays: legacy.activityDays ?? [],
-          tasks: chosen.tasks ?? [],
-          journal: chosen.journal ?? [],
-          resources: chosen.resources ?? [],
-        });
-        resolveLegacyItems(chosen, true);
-        await get().load();
+        await insertIgnore('tasks', tasks.map((t) => ({
+          user_id: userId, id: t.id, title: t.title, domain_id: t.domainId, status: t.status, date_added: t.dateAdded,
+        })));
+        await insertIgnore('journal', journal.map((j) => ({
+          user_id: userId, id: j.id, title: j.title ?? null, content: j.content, created_at: j.timestamp,
+        })));
+        await insertIgnore('resources', resources.map((r) => ({
+          user_id: userId, id: r.id, title: r.title, platform: r.platform, url: r.url, domain_id: r.domainId,
+        })));
       } catch (e) {
         set({ syncError: `Import failed (${msg(e)}).` });
         return 0;
       }
-      return count;
+      // Once imported, never offer them again, even if you delete them later.
+      get().dismissLegacy([
+        ...tasks.map((t) => legacyKey('t', t.id)),
+        ...journal.map((j) => legacyKey('j', j.id)),
+        ...resources.map((r) => legacyKey('r', r.id)),
+      ]);
+      await get().load();
+      return tasks.length + journal.length + resources.length;
     },
 
     addDomain: (name, color) => {
@@ -329,6 +304,9 @@ export const useBrainStore = create<BrainState>()((set, get) => {
     deleteDomain: (id) => {
       const { userId, domains } = get();
       if (!userId || domains.length <= 1) return; // always keep at least one domain
+      const l = readLegacy();
+      dismissIfLegacy('t', [...get().tasks.filter((t) => t.domainId === id).map((t) => t.id), ...(l?.tasks ?? []).filter((t) => t.domainId === id).map((t) => t.id)]);
+      dismissIfLegacy('r', [...get().resources.filter((r) => r.domainId === id).map((r) => r.id), ...(l?.resources ?? []).filter((r) => r.domainId === id).map((r) => r.id)]);
       set((s) => ({
         domains: s.domains.filter((d) => d.id !== id),
         tasks: s.tasks.filter((t) => t.domainId !== id),
@@ -366,6 +344,7 @@ export const useBrainStore = create<BrainState>()((set, get) => {
     },
 
     deleteTask: (id) => {
+      dismissIfLegacy('t', [id]);
       set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) }));
       void persist(() => supabase.from('tasks').delete().eq('id', id));
     },
@@ -383,6 +362,7 @@ export const useBrainStore = create<BrainState>()((set, get) => {
     },
 
     deleteJournal: (id) => {
+      dismissIfLegacy('j', [id]);
       set((s) => ({ journal: s.journal.filter((j) => j.id !== id) }));
       void persist(() => supabase.from('journal').delete().eq('id', id));
     },
@@ -398,6 +378,7 @@ export const useBrainStore = create<BrainState>()((set, get) => {
     },
 
     removeResource: (id) => {
+      dismissIfLegacy('r', [id]);
       set((s) => ({ resources: s.resources.filter((r) => r.id !== id) }));
       void persist(() => supabase.from('resources').delete().eq('id', id));
     },
@@ -461,4 +442,48 @@ export function useDomainNodes(): DomainStats[] {
       }),
     [domains, tasks, resources],
   );
+}
+
+/* ---------- old browser-only data that is not in the account yet ---------- */
+export interface LegacyItem {
+  key: string;
+  kind: LegacyKind;
+  title: string;
+  when?: string;
+  domainName?: string;
+  /** The item's domain no longer exists, so it cannot be imported (it can still be discarded). */
+  blocked: boolean;
+}
+
+export function useLegacyPending(): LegacyItem[] {
+  const tasks = useBrainStore((s) => s.tasks);
+  const journal = useBrainStore((s) => s.journal);
+  const resources = useBrainStore((s) => s.resources);
+  const domains = useBrainStore((s) => s.domains);
+  const dismissed = useBrainStore((s) => s.dismissedLegacy);
+
+  return useMemo(() => {
+    const legacy = readLegacy();
+    if (!legacy) return [];
+    const gone = new Set(dismissed);
+    const names = new Map(domains.map((d) => [d.id, d.name]));
+    const have = { t: new Set(tasks.map((x) => x.id)), j: new Set(journal.map((x) => x.id)), r: new Set(resources.map((x) => x.id)) };
+    const out: LegacyItem[] = [];
+    for (const t of legacy.tasks ?? []) {
+      const key = legacyKey('t', t.id);
+      if (have.t.has(t.id) || gone.has(key)) continue;
+      out.push({ key, kind: 't', title: t.title, when: t.dateAdded, domainName: names.get(t.domainId), blocked: !names.has(t.domainId) });
+    }
+    for (const j of legacy.journal ?? []) {
+      const key = legacyKey('j', j.id);
+      if (have.j.has(j.id) || gone.has(key)) continue;
+      out.push({ key, kind: 'j', title: j.title || j.content.slice(0, 90), when: j.timestamp, blocked: false });
+    }
+    for (const r of legacy.resources ?? []) {
+      const key = legacyKey('r', r.id);
+      if (have.r.has(r.id) || gone.has(key)) continue;
+      out.push({ key, kind: 'r', title: r.title, domainName: names.get(r.domainId), blocked: !names.has(r.domainId) });
+    }
+    return out;
+  }, [tasks, journal, resources, domains, dismissed]);
 }
