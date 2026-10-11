@@ -12,6 +12,59 @@ interface ResourceRow { id: string; title: string; platform: string; url: string
 interface JournalRow { id: string; title: string | null; content: string; created_at: string }
 
 export const LEGACY_KEY = 'orbit-brain-v1'; // old zustand/localStorage key from before Supabase
+const LEGACY_RESOLVED_KEY = 'pare-legacy-resolved-v1';
+
+export type LegacySelection = Partial<Pick<BrainData, 'tasks' | 'resources' | 'journal'>>;
+export type LegacyData = Partial<Writable>;
+
+function getResolvedLegacyKeys(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LEGACY_RESOLVED_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Remember resolved IDs; optionally remove the corresponding legacy copies too. */
+export function resolveLegacyItems(items: LegacySelection, removeFromLegacy = false): number {
+  try {
+    const resolved = getResolvedLegacyKeys();
+    const before = resolved.size;
+    const taskIds = new Set((items.tasks ?? []).map((item) => item.id));
+    const journalIds = new Set((items.journal ?? []).map((item) => item.id));
+    const resourceIds = new Set((items.resources ?? []).map((item) => item.id));
+    for (const id of taskIds) resolved.add(`task:${id}`);
+    for (const id of journalIds) resolved.add(`journal:${id}`);
+    for (const id of resourceIds) resolved.add(`resource:${id}`);
+    if (resolved.size !== before) localStorage.setItem(LEGACY_RESOLVED_KEY, JSON.stringify([...resolved]));
+
+    if (removeFromLegacy && (taskIds.size + journalIds.size + resourceIds.size > 0)) {
+      const raw = localStorage.getItem(LEGACY_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const state = parsed?.state;
+      if (state) {
+        localStorage.setItem(LEGACY_KEY, JSON.stringify({
+          ...parsed,
+          state: {
+            ...state,
+            tasks: Array.isArray(state.tasks) ? state.tasks.filter((item: Task) => !taskIds.has(item.id)) : state.tasks,
+            journal: Array.isArray(state.journal) ? state.journal.filter((item: JournalEntry) => !journalIds.has(item.id)) : state.journal,
+            resources: Array.isArray(state.resources) ? state.resources.filter((item: Resource) => !resourceIds.has(item.id)) : state.resources,
+          },
+        }));
+      }
+    }
+    return resolved.size - before;
+  } catch {
+    return 0;
+  }
+}
+
+export function countLegacyItems(items: LegacySelection | null | undefined): number {
+  return (items?.tasks?.length ?? 0) + (items?.journal?.length ?? 0) + (items?.resources?.length ?? 0);
+}
 
 /* A pending task from an earlier day is "carried over". Derived, never stored. */
 const isCarriedOver = (status: Task['status'], dateAdded: string) =>
@@ -42,7 +95,7 @@ interface BrainState extends BrainData {
   init: () => () => void;
   signOut: () => Promise<void>;
   load: () => Promise<void>;
-  importLegacy: () => Promise<number>;
+  importLegacy: (selection?: LegacySelection) => Promise<number>;
 
   addDomain: (name: string, color?: string) => void;
   deleteDomain: (id: string) => void;
@@ -57,14 +110,21 @@ interface BrainState extends BrainData {
 }
 
 /* ---------- legacy localStorage import ---------- */
-export function readLegacy(): Partial<Writable> | null {
+export function readLegacy(): LegacyData | null {
   try {
     const raw = localStorage.getItem(LEGACY_KEY);
     if (!raw) return null;
     const s = JSON.parse(raw)?.state;
     if (!s) return null;
-    const hasData = (s.tasks?.length ?? 0) + (s.journal?.length ?? 0) + (s.resources?.length ?? 0) > 0;
-    return hasData ? (s as Partial<Writable>) : null;
+    const resolved = getResolvedLegacyKeys();
+    const pending: LegacyData = {
+      domains: Array.isArray(s.domains) ? s.domains : undefined,
+      activityDays: Array.isArray(s.activityDays) ? s.activityDays : undefined,
+      tasks: Array.isArray(s.tasks) ? s.tasks.filter((x: Task) => !resolved.has(`task:${x.id}`)) : [],
+      journal: Array.isArray(s.journal) ? s.journal.filter((x: JournalEntry) => !resolved.has(`journal:${x.id}`)) : [],
+      resources: Array.isArray(s.resources) ? s.resources.filter((x: Resource) => !resolved.has(`resource:${x.id}`)) : [],
+    };
+    return countLegacyItems(pending) > 0 ? pending : null;
   } catch {
     return null;
   }
@@ -153,7 +213,10 @@ export const useBrainStore = create<BrainState>()((set, get) => {
       if (error) throw error;
       if ((count ?? 0) === 0) {
         // Brand-new account: bring over this browser's old data if it has any, otherwise start from the demo seed.
-        await insertAll(session.user.id, readLegacy() ?? buildSeed());
+        const legacy = readLegacy();
+        const initialData = legacy ?? buildSeed();
+        await insertAll(session.user.id, initialData);
+        if (legacy) resolveLegacyItems(legacy, true);
       }
       await get().load();
     } catch (e) {
@@ -220,19 +283,34 @@ export const useBrainStore = create<BrainState>()((set, get) => {
       }
     },
 
-    /** Merge this browser's pre-Supabase data into the account. Never overwrites existing rows. */
-    importLegacy: async () => {
+    /** Import selected old records. Only records successfully imported are marked resolved. */
+    importLegacy: async (selection) => {
       const userId = get().userId;
       const legacy = readLegacy();
       if (!userId || !legacy) return 0;
+      const chosen: LegacySelection = selection ?? {
+        tasks: legacy.tasks ?? [],
+        journal: legacy.journal ?? [],
+        resources: legacy.resources ?? [],
+      };
+      const count = countLegacyItems(chosen);
+      if (count === 0) return 0;
       try {
-        await insertAll(userId, legacy);
+        // Domains and activity history are metadata required to keep selected records usable.
+        await insertAll(userId, {
+          domains: legacy.domains?.length ? legacy.domains : DEFAULT_DOMAINS,
+          activityDays: legacy.activityDays ?? [],
+          tasks: chosen.tasks ?? [],
+          journal: chosen.journal ?? [],
+          resources: chosen.resources ?? [],
+        });
+        resolveLegacyItems(chosen, true);
         await get().load();
       } catch (e) {
         set({ syncError: `Import failed (${msg(e)}).` });
         return 0;
       }
-      return (legacy.tasks?.length ?? 0) + (legacy.journal?.length ?? 0) + (legacy.resources?.length ?? 0);
+      return count;
     },
 
     addDomain: (name, color) => {

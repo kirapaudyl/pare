@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Flame, LayoutDashboard, Library, LogOut, Notebook, Plus, X } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import Journal from './components/Journal';
@@ -6,8 +6,9 @@ import Resources from './components/Resources';
 import QuickDump from './components/QuickDump';
 import Auth from './components/Auth';
 import SetupNotice from './components/SetupNotice';
+import LegacyImportDialog from './components/LegacyImportDialog';
 import { isSupabaseConfigured } from './lib/supabase';
-import { readLegacy, useBrainStore, useStreak } from './store/useBrainStore';
+import { countLegacyItems, readLegacy, resolveLegacyItems, useBrainStore, useStreak, type LegacySelection } from './store/useBrainStore';
 
 type View = 'dashboard' | 'journal' | 'resources';
 
@@ -52,17 +53,52 @@ function Banners() {
   const journal = useBrainStore((s) => s.journal);
   const resources = useBrainStore((s) => s.resources);
   const [busy, setBusy] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [, setLegacyRevision] = useState(0);
 
-  // Old browser-only data that isn't in the account yet. Clears itself once imported.
-  const missing = useMemo(() => {
+  // If an old record is already in Supabase, remember that it was migrated.
+  // This prevents it reappearing in the legacy prompt after the user later deletes it.
+  useEffect(() => {
     const legacy = readLegacy();
-    if (!legacy) return 0;
-    const count = (old: { id: string }[] = [], now: { id: string }[]) => {
-      const ids = new Set(now.map((x) => x.id));
-      return old.filter((x) => !ids.has(x.id)).length;
+    if (!legacy) return;
+    const alreadyPresent: LegacySelection = {
+      tasks: (legacy.tasks ?? []).filter((old) => tasks.some((current) => current.id === old.id)),
+      journal: (legacy.journal ?? []).filter((old) => journal.some((current) => current.id === old.id)),
+      resources: (legacy.resources ?? []).filter((old) => resources.some((current) => current.id === old.id)),
     };
-    return count(legacy.tasks, tasks) + count(legacy.journal, journal) + count(legacy.resources, resources);
+    if (countLegacyItems(alreadyPresent) > 0 && resolveLegacyItems(alreadyPresent, true) > 0) {
+      setLegacyRevision((revision) => revision + 1);
+    }
   }, [tasks, journal, resources]);
+
+  const rawLegacy = readLegacy();
+  const taskIds = new Set(tasks.map((item) => item.id));
+  const journalIds = new Set(journal.map((item) => item.id));
+  const resourceIds = new Set(resources.map((item) => item.id));
+  const missingLegacy = rawLegacy ? {
+    ...rawLegacy,
+    tasks: (rawLegacy.tasks ?? []).filter((item) => !taskIds.has(item.id)),
+    journal: (rawLegacy.journal ?? []).filter((item) => !journalIds.has(item.id)),
+    resources: (rawLegacy.resources ?? []).filter((item) => !resourceIds.has(item.id)),
+  } : null;
+  const missing = countLegacyItems(missingLegacy);
+
+  const handleImport = async (selection: LegacySelection) => {
+    setBusy(true);
+    try {
+      const imported = await importLegacy(selection);
+      if (imported > 0) setReviewOpen(false);
+      setLegacyRevision((revision) => revision + 1);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDiscard = (selection: LegacySelection) => {
+    resolveLegacyItems(selection, true);
+    setReviewOpen(false);
+    setLegacyRevision((revision) => revision + 1);
+  };
 
   return (
     <>
@@ -74,15 +110,23 @@ function Banners() {
       )}
       {missing > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 bg-card px-5 py-2.5 text-sm shadow-lift">
-          <span>This browser still has {missing} item{missing === 1 ? '' : 's'} saved from before Supabase.</span>
+          <span>This browser has {missing} unreviewed item{missing === 1 ? '' : 's'} saved from before Supabase.</span>
           <button
-            disabled={busy}
-            onClick={async () => { setBusy(true); await importLegacy(); setBusy(false); }}
-            className="h-8 rounded-lg bg-ink px-3 font-semibold text-white disabled:opacity-40"
+            onClick={() => setReviewOpen(true)}
+            className="h-9 rounded-lg bg-ink px-4 font-semibold text-white transition-colors hover:bg-ink/90"
           >
-            {busy ? 'Importing' : 'Import them'}
+            Review {missing} item{missing === 1 ? '' : 's'}
           </button>
         </div>
+      )}
+      {reviewOpen && missingLegacy && (
+        <LegacyImportDialog
+          legacy={missingLegacy}
+          busy={busy}
+          onClose={() => setReviewOpen(false)}
+          onImport={handleImport}
+          onDiscard={handleDiscard}
+        />
       )}
     </>
   );

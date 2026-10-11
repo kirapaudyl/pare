@@ -8,7 +8,14 @@
 }
 
 @keyframes dashflow { to { stroke-dashoffset: -24; } }
-.dash-flow { animation: dashflow 1.6s linear infinite; }
+.dash-flow { animation: dashflow 4.8s linear infinite; }
+
+/* Low-contrast graph paper; the color comes from the network, not the canvas. */
+.brain-network {
+  background-color: #fafaff;
+  background-image: radial-gradient(rgba(102, 108, 145, .24) .7px, transparent .7px);
+  background-size: 19px 19px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .dash-flow { animation: none; }
