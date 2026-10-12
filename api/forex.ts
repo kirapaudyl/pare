@@ -1,9 +1,7 @@
-// Vercel serverless function: GET /api/forex
-// The browser can't read Nabil's page directly (CORS), so this runs on the server,
-// reads the page, and returns clean JSON. NRB's official rate is included as a reference.
-
+// GET /api/forex  ->  Nabil Bank rates for USD, GBP, EUR (+ NRB official rates with the previous day for the up/down arrow)
 const NABIL_URL = 'https://www.nabilbank.com/currency';
 const UA = 'Mozilla/5.0 (compatible; PareRateCheck/1.0)';
+const CODES = ['USD', 'GBP', 'EUR'] as const;
 
 const nepalToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kathmandu' }).format(new Date());
 
@@ -29,41 +27,56 @@ const toText = (html: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-const sane = (cashBuy: number, nonCashBuy: number, sell: number) =>
-  [cashBuy, nonCashBuy, sell].every((n) => Number.isFinite(n) && n > 50 && n < 500) && sell >= cashBuy;
+const sane = (a: number, b: number, c: number) => [a, b, c].every((n) => Number.isFinite(n) && n > 10 && n < 1000) && c >= a;
+
+interface Row { cashBuy: number; nonCashBuy: number; sell: number }
+
+function rowFor(text: string, html: string, code: string): Row | null {
+  const num = '(\\d+(?:\\.\\d+)?)';
+  let m = new RegExp(`\\b${code}\\b.{0,80}?Cash\\s*Buy\\s*${num}\\s*Non\\s*Cash\\s*Buy\\s*${num}\\s*Sell\\s*${num}`, 'i').exec(text);
+  if (!m) m = new RegExp(`${code}[^}]{0,300}?cash_?buy\\W{1,6}${num}[^}]{0,200}?non_?cash_?buy\\W{1,6}${num}[^}]{0,200}?sell\\W{1,6}${num}`, 'i').exec(html);
+  if (!m) return null;
+  const row = { cashBuy: Number(m[1]), nonCashBuy: Number(m[2]), sell: Number(m[3]) };
+  return sane(row.cashBuy, row.nonCashBuy, row.sell) ? row : null;
+}
 
 function parseNabil(html: string) {
   const text = toText(html);
-  const num = '(\\d+(?:\\.\\d+)?)';
-  let m = new RegExp(`\\bUSD\\b.{0,80}?Cash\\s*Buy\\s*${num}\\s*Non\\s*Cash\\s*Buy\\s*${num}\\s*Sell\\s*${num}`, 'i').exec(text);
-  // Fallback: the numbers may only exist inside the page's embedded JSON.
-  if (!m) m = new RegExp(`USD[^}]{0,300}?cash_?buy\\W{1,6}${num}[^}]{0,200}?non_?cash_?buy\\W{1,6}${num}[^}]{0,200}?sell\\W{1,6}${num}`, 'i').exec(html);
-  if (!m) throw new Error('Could not find the USD row on Nabil\u2019s page (layout may have changed)');
-
-  const cashBuy = Number(m[1]), nonCashBuy = Number(m[2]), sell = Number(m[3]);
-  if (!sane(cashBuy, nonCashBuy, sell)) throw new Error('USD numbers on Nabil\u2019s page looked wrong, ignoring them');
-
-  // Nabil shows the last published day when today has no data; use that date, not today's.
+  const rates: Record<string, Row> = {};
+  for (const c of CODES) {
+    const r = rowFor(text, html, c);
+    if (r) rates[c] = r;
+  }
+  if (!rates.USD) throw new Error('Could not find the USD row on Nabil\u2019s page (layout may have changed)');
   const asOf =
     /latest available data from\s*(\d{4}-\d{2}-\d{2})/i.exec(text)?.[1] ??
     /Exchange Rate of\s*(\d{4}-\d{2}-\d{2})/i.exec(text)?.[1] ??
     nepalToday();
   const time = /As of\s*(\d{2}:\d{2}:\d{2})/i.exec(text)?.[1];
-  return { cashBuy, nonCashBuy, sell, asOf, time, _text: text };
+  return { rates, asOf, time, _text: text };
 }
+
+interface NrbRate { buy: number; sell: number; prevBuy?: number; prevSell?: number }
 
 async function getNrb() {
   const to = nepalToday();
-  const from = new Date(Date.now() - 6 * 86400e3).toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 8 * 86400e3).toISOString().slice(0, 10);
   const raw = await fetchText(`https://www.nrb.org.np/api/forex/v1/rates?from=${from}&to=${to}&per_page=10&page=1`, 'application/json');
-  const j = JSON.parse(raw);
-  const days: any[] = j?.data?.payload ?? [];
+  const days: any[] = JSON.parse(raw)?.data?.payload ?? [];
   days.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  for (const d of days) {
-    const usd = (d.rates ?? []).find((r: any) => r?.currency?.iso3 === 'USD');
-    if (usd && Number(usd.sell) > 50) return { buy: Number(usd.buy), sell: Number(usd.sell), asOf: String(d.date) };
+  const out: Record<string, NrbRate> = {};
+  let asOf = '';
+  for (const code of CODES) {
+    const found = days
+      .map((d) => ({ date: String(d.date), r: (d.rates ?? []).find((x: any) => x?.currency?.iso3 === code) }))
+      .filter((x) => x.r && Number(x.r.sell) > 10);
+    if (!found.length) continue;
+    const [cur, prev] = found;
+    out[code] = { buy: Number(cur.r.buy), sell: Number(cur.r.sell), prevBuy: prev ? Number(prev.r.buy) : undefined, prevSell: prev ? Number(prev.r.sell) : undefined };
+    if (!asOf) asOf = cur.date;
   }
-  throw new Error('No USD rate in NRB response');
+  if (!out.USD) throw new Error('No USD rate in NRB response');
+  return { asOf, rates: out };
 }
 
 export async function GET(request: Request) {
@@ -82,16 +95,15 @@ export async function GET(request: Request) {
 
   const body: Record<string, unknown> = {
     fetchedAt: new Date().toISOString(),
-    nabil: nabil && { cashBuy: nabil.cashBuy, nonCashBuy: nabil.nonCashBuy, sell: nabil.sell, asOf: nabil.asOf, time: nabil.time },
-    nrb,
+    asOf: nabil?.asOf ?? null,
+    time: nabil?.time ?? null,
+    rates: nabil?.rates ?? null,
+    nrb: nrb ? { asOf: nrb.asOf, rates: nrb.rates } : null,
     errors,
   };
-  // /api/forex?debug=1 shows what the server actually received, to fix the parser if Nabil changes its page.
   if (debug) {
     const i = rawText.search(/\bUSD\b/i);
     body.debug = { textLength: rawText.length, aroundUSD: i >= 0 ? rawText.slice(Math.max(0, i - 80), i + 320) : rawText.slice(0, 400) };
   }
-  return Response.json(body, {
-    headers: { 'Cache-Control': debug ? 'no-store' : 'public, s-maxage=300, stale-while-revalidate=600' },
-  });
+  return Response.json(body, { headers: { 'Cache-Control': debug ? 'no-store' : 'public, s-maxage=300, stale-while-revalidate=600' } });
 }
