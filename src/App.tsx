@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Flame, LayoutDashboard, Library, LogOut, Notebook, Plus, X } from 'lucide-react';
+import { Suspense, lazy, useEffect, useState } from 'react';
+import { Flame, LayoutDashboard, Library, LogOut, Notebook, Plus, Wallet, X } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import Journal from './components/Journal';
 import Resources from './components/Resources';
@@ -10,7 +10,10 @@ import { isSupabaseConfigured } from './lib/supabase';
 import LegacyImport from './components/LegacyImport';
 import { useBrainStore, useStreak } from './store/useBrainStore';
 
-type View = 'dashboard' | 'journal' | 'resources';
+// Finance loads on demand so the rest of Pare stays as light as before.
+const FinanceView = lazy(() => import('./components/finance/FinanceView'));
+
+type View = 'dashboard' | 'journal' | 'resources' | 'finance';
 
 export default function App() {
   if (!isSupabaseConfigured) return <SetupNotice />;
@@ -97,6 +100,7 @@ function Shell() {
             {tab('dashboard', 'Dashboard', LayoutDashboard)}
             {tab('journal', 'Journal', Notebook)}
             {tab('resources', 'Resources', Library)}
+            {tab('finance', 'Finance', Wallet)}
           </nav>
           <div className="ml-auto flex items-center gap-3">
             <div
@@ -129,6 +133,11 @@ function Shell() {
         {view === 'dashboard' && <Dashboard />}
         {view === 'journal' && <Journal />}
         {view === 'resources' && <Resources />}
+        {view === 'finance' && (
+          <Suspense fallback={<div className="grid min-h-[40vh] place-items-center text-sm text-muted">Loading Finance&hellip;</div>}>
+            <FinanceView />
+          </Suspense>
+        )}
       </main>
 
       <QuickDump open={dumpOpen} onClose={() => setDumpOpen(false)} />
