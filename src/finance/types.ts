@@ -75,20 +75,39 @@ export interface FinGoal {
   archived: boolean;
 }
 
-/** A loan you are repaying (e.g. a phone loan paid in EMIs). */
+export type LoanKind = 'bank' | 'personal';
+
+/**
+ * A loan you are repaying.
+ *  bank:     paid in EMIs on fixed due dates (e.g. a phone loan)
+ *  personal: from a friend or family. No EMI and no fixed date: you repay what you can, when you can.
+ */
 export interface FinLoan {
   id: string;
   name: string;
   lender: string | null;
+  kind: LoanKind;
   /** What you still owed on `openingDate`. Payments recorded from that date on reduce it. */
   openingOutstandingPaisa: number;
   openingDate: string;      // yyyy-mm-dd
-  emiPaisa: number;
-  firstDueOn: string;       // the next EMI due as of `openingDate`; later due dates keep the same day of month
-  emisPaidBefore: number;   // EMIs paid before you started tracking (information only)
+  emiPaisa: number | null;  // bank loans only
+  firstDueOn: string | null; // bank loans only: the next EMI due as of `openingDate`; later due dates keep the same day of month
+  returnBy: string | null;  // personal loans only: an optional reminder date, never a schedule
+  emisPaidBefore: number;   // EMIs paid before you started tracking (information only, bank loans)
   originalPaisa: number | null; // total loan amount, if you want progress measured in rupees
   note: string | null;
   archived: boolean;
+}
+
+/** A way to cover the gap to your monthly income target: something you already have (resource) or could do (option). */
+export interface FinGapItem {
+  id: string;
+  kind: 'resource' | 'option';
+  title: string;
+  expectedPaisa: number;
+  note: string | null;
+  done: boolean;
+  position: number;
 }
 
 /** Money other people owe you. It is an asset in net worth but never available cash until collected. */

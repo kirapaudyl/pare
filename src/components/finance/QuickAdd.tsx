@@ -6,10 +6,6 @@ import { parseQuickLine, suggestCategory } from '../../finance/quick';
 import type { Bucket } from '../../finance/types';
 import { Segmented, btnPrimary, cardCls, fromLocalInput, inputCls, toLocalInput, useToast } from './ui';
 
-const BUCKETS: { id: Bucket; label: string }[] = [
-  { id: 'needs', label: 'Needs' }, { id: 'wants', label: 'Wants' }, { id: 'savings', label: 'Savings' },
-];
-
 /**
  * One line: "ride 20", "20 momo", "+50000 salary". Enter saves. The account stays selected between entries,
  * and the category/bucket are filled from your keyword rules and history, so a normal entry is type + Enter.
@@ -27,7 +23,6 @@ export default function QuickAdd({ inputRef, onMore }: { inputRef: RefObject<HTM
   const [kindToggle, setKindToggle] = useState<'expense' | 'income'>('expense');
   const [accountId, setAccountId] = useState<string | null>(null);
   const [pickedCat, setPickedCat] = useState<string | null | undefined>(undefined); // undefined = follow the suggestion
-  const [pickedBucket, setPickedBucket] = useState<Bucket | null>(null);
   const [more, setMore] = useState(false);
   const [when, setWhen] = useState('');
   const [note, setNote] = useState('');
@@ -41,11 +36,12 @@ export default function QuickAdd({ inputRef, onMore }: { inputRef: RefObject<HTM
   const account = live.find((a) => a.id === accountId) ?? live.find((a) => a.id === defaultAccountId) ?? live[0];
   const categoryId = pickedCat === undefined ? suggestion?.categoryId ?? null : pickedCat;
   const category = categories.find((c) => c.id === categoryId) ?? null;
-  const bucket: Bucket = pickedBucket ?? category?.bucket ?? 'wants';
+  // The category decides the internal bucket; there is no budget to pick one for any more.
+  const bucket: Bucket = category?.bucket ?? 'wants';
   const catOptions = categories.filter((c) => c.kind === kind && !c.archived);
 
   // Typing a new description lets the suggestion take over again.
-  useEffect(() => { setPickedCat(undefined); setPickedBucket(null); }, [parsed.description, kind]);
+  useEffect(() => { setPickedCat(undefined); }, [parsed.description, kind]);
   useEffect(() => { setError(null); }, [line]);
 
   const submit = () => {
@@ -99,7 +95,7 @@ export default function QuickAdd({ inputRef, onMore }: { inputRef: RefObject<HTM
 
         <select
           aria-label="Category" value={categoryId ?? ''} className="h-9 rounded-lg border border-line bg-paper px-2 text-sm"
-          onChange={(e) => { setPickedCat(e.target.value || null); setPickedBucket(null); }}
+          onChange={(e) => setPickedCat(e.target.value || null)}
         >
           <option value="">Uncategorized</option>
           {catOptions.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -107,8 +103,6 @@ export default function QuickAdd({ inputRef, onMore }: { inputRef: RefObject<HTM
         {pickedCat === undefined && suggestion && (
           <span className="text-xs text-muted">{suggestion.reason === 'history' ? 'from your history' : 'from a keyword rule'}</span>
         )}
-
-        {kind === 'expense' && <Segmented label="Budget bucket" value={bucket} onChange={setPickedBucket} options={BUCKETS} />}
 
         <button onClick={() => setMore((v) => !v)} aria-expanded={more} className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-muted hover:text-ink">
           <SlidersHorizontal size={14} /> {more ? 'Fewer options' : 'Date, note'}

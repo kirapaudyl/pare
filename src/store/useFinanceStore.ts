@@ -5,7 +5,8 @@ import { uid } from './seed';
 import { accountBalances, dayKeyOf, isLive, validateTx } from '../finance/ledger';
 import { receivableStatus } from '../finance/debts';
 import { DEFAULT_CATEGORIES, DEFAULT_SETTINGS } from '../finance/quick';
-import type { AccountType, Bucket, DebtBucket, FinAccount, FinCategory, FinGoal, FinLoan, FinReceivable, FinSettings, FinTx, TxInput } from '../finance/types';
+import { MAX_PAISA } from '../finance/money';
+import type { AccountType, Bucket, DebtBucket, FinAccount, FinCategory, FinGapItem, FinGoal, FinLoan, FinReceivable, FinSettings, FinTx, LoanKind, TxInput } from '../finance/types';
 
 export type Result<T = object> = ({ ok: true } & T) | { ok: false; error: string };
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
@@ -15,7 +16,8 @@ interface AccountRow { id: string; name: string; type: AccountType; opening_pais
 interface CategoryRow { id: string; name: string; kind: 'expense' | 'income'; bucket: Bucket | null; keywords: string[]; position: number; archived: boolean }
 interface TxRow { id: string; kind: FinTx['kind']; amount_paisa: number; occurred_at: string; description: string; account_id: string; to_account_id: string | null; category_id: string | null; bucket: Bucket | null; refund_of: string | null; goal_id: string | null; loan_id: string | null; receivable_id: string | null; note: string | null; created_at: string; deleted_at: string | null }
 interface GoalRow { id: string; name: string; target_paisa: number; deadline: string | null; planned_monthly_paisa: number; account_id: string | null; archived: boolean }
-interface LoanRow { id: string; name: string; lender: string | null; opening_outstanding_paisa: number; opening_date: string; emi_paisa: number; first_due_on: string; emis_paid_before: number; original_paisa: number | null; note: string | null; archived: boolean }
+interface LoanRow { id: string; name: string; lender: string | null; kind?: LoanKind; opening_outstanding_paisa: number; opening_date: string; emi_paisa: number | null; first_due_on: string | null; return_by?: string | null; emis_paid_before: number; original_paisa: number | null; note: string | null; archived: boolean }
+interface GapRow { id: string; kind: 'resource' | 'option'; title: string; expected_paisa: number; note: string | null; done: boolean; position: number }
 interface ReceivableRow { id: string; person: string; amount_paisa: number; lent_on: string; expected_on: string | null; note: string | null; written_off_paisa: number; archived: boolean }
 interface SettingsRow { income_target_paisa: number; expected_income_paisa: number; needs_pct: number; wants_pct: number; savings_pct: number; budget_base: FinSettings['budgetBase']; default_account_id: string | null; debt_bucket?: DebtBucket }
 
@@ -24,7 +26,8 @@ const categoryFrom = (r: CategoryRow): FinCategory => ({ id: r.id, name: r.name,
 const txFrom = (r: TxRow): FinTx => ({ id: r.id, kind: r.kind, amountPaisa: Number(r.amount_paisa), occurredAt: r.occurred_at, description: r.description, accountId: r.account_id, toAccountId: r.to_account_id, categoryId: r.category_id, bucket: r.bucket, refundOf: r.refund_of, goalId: r.goal_id, loanId: r.loan_id ?? null, receivableId: r.receivable_id ?? null, note: r.note, createdAt: r.created_at, deletedAt: r.deleted_at });
 const goalFrom = (r: GoalRow): FinGoal => ({ id: r.id, name: r.name, targetPaisa: Number(r.target_paisa), deadline: r.deadline, plannedMonthlyPaisa: Number(r.planned_monthly_paisa), accountId: r.account_id, archived: r.archived });
 const settingsFrom = (r: SettingsRow): FinSettings => ({ incomeTargetPaisa: Number(r.income_target_paisa), expectedIncomePaisa: Number(r.expected_income_paisa), needsPct: r.needs_pct, wantsPct: r.wants_pct, savingsPct: r.savings_pct, budgetBase: r.budget_base, defaultAccountId: r.default_account_id, debtBucket: r.debt_bucket ?? 'needs' });
-const loanFrom = (r: LoanRow): FinLoan => ({ id: r.id, name: r.name, lender: r.lender, openingOutstandingPaisa: Number(r.opening_outstanding_paisa), openingDate: r.opening_date, emiPaisa: Number(r.emi_paisa), firstDueOn: r.first_due_on, emisPaidBefore: r.emis_paid_before, originalPaisa: r.original_paisa == null ? null : Number(r.original_paisa), note: r.note, archived: r.archived });
+const gapFrom = (r: GapRow): FinGapItem => ({ id: r.id, kind: r.kind, title: r.title, expectedPaisa: Number(r.expected_paisa), note: r.note, done: r.done, position: r.position });
+const loanFrom = (r: LoanRow): FinLoan => ({ id: r.id, name: r.name, lender: r.lender, kind: r.kind ?? 'bank', openingOutstandingPaisa: Number(r.opening_outstanding_paisa), openingDate: r.opening_date, emiPaisa: r.emi_paisa == null ? null : Number(r.emi_paisa), firstDueOn: r.first_due_on, returnBy: r.return_by ?? null, emisPaidBefore: r.emis_paid_before, originalPaisa: r.original_paisa == null ? null : Number(r.original_paisa), note: r.note, archived: r.archived });
 const receivableFrom = (r: ReceivableRow): FinReceivable => ({ id: r.id, person: r.person, amountPaisa: Number(r.amount_paisa), lentOn: r.lent_on, expectedOn: r.expected_on, note: r.note, writtenOffPaisa: Number(r.written_off_paisa ?? 0), archived: r.archived });
 
 const txRow = (t: Omit<FinTx, never>) => ({
@@ -64,15 +67,22 @@ const normKeywords = (kws: string[]) => [...new Set(kws.map((k) => k.trim().toLo
 const isDay = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(new Date(`${s}T00:00:00`).getTime());
 const localNoon = (day: string) => new Date(`${day}T12:00:00`).toISOString();
 
-function validateLoan(l: Pick<FinLoan, 'name' | 'openingOutstandingPaisa' | 'openingDate' | 'emiPaisa' | 'firstDueOn' | 'emisPaidBefore' | 'originalPaisa'>): string | null {
+function validateLoan(l: Pick<FinLoan, 'name' | 'kind' | 'openingOutstandingPaisa' | 'openingDate' | 'emiPaisa' | 'firstDueOn' | 'returnBy' | 'emisPaidBefore' | 'originalPaisa'>): string | null {
   if (!l.name.trim()) return 'Give the loan a name';
+  if (l.kind !== 'bank' && l.kind !== 'personal') return 'Choose whether this is a bank loan or a loan from a person';
   if (!(l.openingOutstandingPaisa > 0)) return 'Enter how much is still owed';
-  if (!(l.emiPaisa > 0)) return 'Enter the EMI amount';
-  if (!isDay(l.openingDate)) return 'The balance date is not valid';
-  if (!isDay(l.firstDueOn)) return 'Enter the date your next EMI is due';
+  if (!isDay(l.openingDate)) return 'The date is not valid';
+  if (l.originalPaisa !== null && l.originalPaisa < l.openingOutstandingPaisa) return 'The total borrowed cannot be less than what is still owed';
+  if (l.kind === 'personal') {
+    if (l.emiPaisa !== null || l.firstDueOn !== null) return 'A loan from a person has no EMI or fixed due date';
+    if (l.returnBy !== null && (!isDay(l.returnBy) || l.returnBy < l.openingDate)) return 'The return-by date cannot be before the date you borrowed it';
+    return null;
+  }
+  if (l.emiPaisa === null || !(l.emiPaisa > 0)) return 'Enter the EMI amount';
+  if (l.firstDueOn === null || !isDay(l.firstDueOn)) return 'Enter the date your next EMI is due';
   if (l.firstDueOn < l.openingDate) return 'The next EMI date cannot be before the date the balance is as of';
+  if (l.returnBy !== null) return 'A bank loan is repaid by EMIs, not a return-by date';
   if (!Number.isInteger(l.emisPaidBefore) || l.emisPaidBefore < 0 || l.emisPaidBefore > 600) return 'EMIs already paid must be a whole number';
-  if (l.originalPaisa !== null && l.originalPaisa < l.openingOutstandingPaisa) return 'The total loan amount cannot be less than what is still owed';
   return null;
 }
 
@@ -99,6 +109,7 @@ interface FinanceState {
   goals: FinGoal[];
   loans: FinLoan[];
   receivables: FinReceivable[];
+  gapItems: FinGapItem[];
   settings: FinSettings;
   loadedAt: number;
 
@@ -115,6 +126,8 @@ interface FinanceState {
   setAccountArchived: (id: string, archived: boolean) => Result;
   deleteAccount: (id: string) => Result;
   reconcile: (accountId: string, countedPaisa: number) => Result<{ diff: number }>;
+  /** Make the account show what you really have by correcting its starting balance. Records no transaction. */
+  fixStartingBalance: (accountId: string, actualPaisa: number) => Result<{ diff: number }>;
 
   addCategory: (c: { name: string; kind: 'expense' | 'income'; bucket: Bucket | null; keywords: string[] }) => Result;
   updateCategory: (id: string, patch: Partial<Pick<FinCategory, 'name' | 'bucket' | 'keywords' | 'archived'>>) => Result;
@@ -135,6 +148,10 @@ interface FinanceState {
   writeOffReceivable: (id: string) => Result;
   archiveReceivable: (id: string, archived: boolean) => Result;
   deleteReceivable: (id: string) => Result;
+
+  addGapItem: (g: { kind: 'resource' | 'option'; title: string; expectedPaisa: number; note?: string | null }) => Result;
+  updateGapItem: (id: string, patch: Partial<Pick<FinGapItem, 'kind' | 'title' | 'expectedPaisa' | 'note' | 'done'>>) => Result;
+  deleteGapItem: (id: string) => Result;
 
   saveSettings: (patch: Partial<FinSettings>) => Result;
 }
@@ -195,19 +212,20 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
         await bootstrap(uidv);
         ({ accounts, categories, settings } = await core());
       }
-      const [txs, trash, goals, loans, receivables] = await Promise.all([
+      const [txs, trash, goals, loans, receivables, gapItems] = await Promise.all([
         fetchAll<TxRow>('fin_transactions', [['occurred_at', false], ['id', true]], (q) => q.is('deleted_at', null)),
         fetchAll<TxRow>('fin_transactions', [['deleted_at', false], ['id', true]], (q) => q.not('deleted_at', 'is', null).gte('deleted_at', since)),
         fetchAll<GoalRow>('fin_goals', [['created_at', true], ['id', true]]),
         fetchAll<LoanRow>('fin_loans', [['created_at', true], ['id', true]]),
         fetchAll<ReceivableRow>('fin_receivables', [['created_at', true], ['id', true]]),
+        fetchAll<GapRow>('fin_gap_items', [['position', true], ['created_at', true], ['id', true]]),
       ]);
 
       set({
         status: 'ready', error: null, needsSchema: false, loadedAt: Date.now(),
         accounts: accounts.map(accountFrom), categories: categories.map(categoryFrom),
         txs: txs.map(txFrom).sort(byDateDesc), trash: trash.map(txFrom), goals: goals.map(goalFrom),
-        loans: loans.map(loanFrom), receivables: receivables.map(receivableFrom),
+        loans: loans.map(loanFrom), receivables: receivables.map(receivableFrom), gapItems: gapItems.map(gapFrom),
         settings: settings ? settingsFrom(settings) : DEFAULT_SETTINGS,
       });
     } catch (e) {
@@ -219,7 +237,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
 
   return {
     status: 'idle', error: null, notice: null, needsSchema: false,
-    accounts: [], categories: [], txs: [], trash: [], goals: [], loans: [], receivables: [], settings: DEFAULT_SETTINGS, loadedAt: 0,
+    accounts: [], categories: [], txs: [], trash: [], goals: [], loans: [], receivables: [], gapItems: [], settings: DEFAULT_SETTINGS, loadedAt: 0,
 
     load: async (force = false) => {
       if (loading) return loading;
@@ -339,6 +357,21 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
       return { ok: true, diff };
     },
 
+    fixStartingBalance: (accountId, actualPaisa) => {
+      const acc = get().accounts.find((a) => a.id === accountId);
+      if (!acc) return fail('Account not found');
+      if (!Number.isSafeInteger(actualPaisa) || Math.abs(actualPaisa) > MAX_PAISA) return fail('That amount is not valid');
+      const ledger = accountBalances(get().accounts, get().txs).get(accountId) ?? 0;
+      const diff = actualPaisa - ledger;
+      const openingPaisa = acc.openingPaisa + diff;
+      if (Math.abs(openingPaisa) > MAX_PAISA) return fail('That amount is not valid');
+      const now = new Date().toISOString();
+      // Only the starting balance moves, so every past transaction stays exactly as recorded.
+      set((s) => ({ accounts: s.accounts.map((a) => (a.id === accountId ? { ...a, openingPaisa, lastCheckedAt: now, lastCheckedPaisa: actualPaisa } : a)) }));
+      void persist('the balance', () => supabase.from('fin_accounts').update({ opening_paisa: openingPaisa, last_checked_at: now, last_checked_paisa: actualPaisa }).eq('id', accountId));
+      return { ok: true, diff };
+    },
+
     /* ----- categories ----- */
     addCategory: ({ name, kind, bucket, keywords }) => {
       const uidv = userId();
@@ -416,7 +449,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
       set((s) => ({ loans: [...s.loans, loan] }));
       void persist('the loan', () => supabase.from('fin_loans').insert({
         user_id: uidv, id: loan.id, name: loan.name, lender: loan.lender, opening_outstanding_paisa: loan.openingOutstandingPaisa,
-        opening_date: loan.openingDate, emi_paisa: loan.emiPaisa, first_due_on: loan.firstDueOn, emis_paid_before: loan.emisPaidBefore,
+        kind: loan.kind, opening_date: loan.openingDate, emi_paisa: loan.emiPaisa, first_due_on: loan.firstDueOn, return_by: loan.returnBy, emis_paid_before: loan.emisPaidBefore,
         original_paisa: loan.originalPaisa, note: loan.note,
       }));
       if (received) {
@@ -430,6 +463,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
     updateLoan: (id, patch) => {
       const cur = get().loans.find((l) => l.id === id);
       if (!cur) return fail('Loan not found');
+      if (patch.kind && patch.kind !== cur.kind) return fail('A loan\u2019s type cannot be changed. Add a new loan instead.');
       const next: FinLoan = { ...cur, ...patch };
       const problem = validateLoan(next);
       if (problem) return fail(problem);
@@ -438,7 +472,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
       set((s) => ({ loans: s.loans.map((l) => (l.id === id ? next : l)) }));
       void persist('the loan', () => supabase.from('fin_loans').update({
         name: next.name.trim(), lender: next.lender, opening_outstanding_paisa: next.openingOutstandingPaisa, opening_date: next.openingDate,
-        emi_paisa: next.emiPaisa, first_due_on: next.firstDueOn, emis_paid_before: next.emisPaidBefore, original_paisa: next.originalPaisa, note: next.note, archived: next.archived,
+        emi_paisa: next.emiPaisa, first_due_on: next.firstDueOn, return_by: next.returnBy, emis_paid_before: next.emisPaidBefore, original_paisa: next.originalPaisa, note: next.note, archived: next.archived,
       }).eq('id', id));
       return { ok: true };
     },
@@ -448,7 +482,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
       const loan = get().loans.find((l) => l.id === loanId);
       if (!loan) return fail('Loan not found');
       const r = get().addTx({
-        kind: 'loan_payment', amountPaisa: p.amountPaisa, occurredAt: p.occurredAt, description: `EMI: ${loan.name}`, accountId: p.accountId,
+        kind: 'loan_payment', amountPaisa: p.amountPaisa, occurredAt: p.occurredAt, description: loan.kind === 'bank' ? `EMI: ${loan.name}` : `Paid back: ${loan.name}`, accountId: p.accountId,
         toAccountId: null, categoryId: null, bucket: null, refundOf: null, goalId: null, loanId, receivableId: null, note: p.note?.trim() || null,
       });
       return r.ok ? { ok: true } : r;
@@ -548,6 +582,35 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
       if ([...get().txs, ...get().trash].some((t) => t.receivableId === id)) return fail('This has money movements recorded. Write it off or archive it instead.');
       set((s) => ({ receivables: s.receivables.filter((r) => r.id !== id) }));
       void persist('the deletion', () => supabase.from('fin_receivables').delete().eq('id', id));
+      return { ok: true };
+    },
+
+    /* ----- ways to cover the income gap ----- */
+    addGapItem: ({ kind, title, expectedPaisa, note }) => {
+      const uidv = userId();
+      if (!uidv) return fail('You are signed out');
+      if (!title.trim()) return fail('Give it a name');
+      if (!Number.isSafeInteger(expectedPaisa) || expectedPaisa < 0 || expectedPaisa > MAX_PAISA) return fail('The amount is not valid');
+      const item: FinGapItem = { id: uid(), kind, title: title.trim(), expectedPaisa, note: note?.trim() || null, done: false, position: nextPos(get().gapItems) };
+      set((s) => ({ gapItems: [...s.gapItems, item] }));
+      void persist('the item', () => supabase.from('fin_gap_items').insert({ user_id: uidv, id: item.id, kind: item.kind, title: item.title, expected_paisa: item.expectedPaisa, note: item.note, done: false, position: item.position }));
+      return { ok: true };
+    },
+
+    updateGapItem: (id, patch) => {
+      const cur = get().gapItems.find((g) => g.id === id);
+      if (!cur) return fail('That item no longer exists');
+      const next = { ...cur, ...patch, title: (patch.title ?? cur.title).trim() };
+      if (!next.title) return fail('Give it a name');
+      if (!Number.isSafeInteger(next.expectedPaisa) || next.expectedPaisa < 0 || next.expectedPaisa > MAX_PAISA) return fail('The amount is not valid');
+      set((s) => ({ gapItems: s.gapItems.map((g) => (g.id === id ? next : g)) }));
+      void persist('the item', () => supabase.from('fin_gap_items').update({ kind: next.kind, title: next.title, expected_paisa: next.expectedPaisa, note: next.note?.trim() || null, done: next.done }).eq('id', id));
+      return { ok: true };
+    },
+
+    deleteGapItem: (id) => {
+      set((s) => ({ gapItems: s.gapItems.filter((g) => g.id !== id) }));
+      void persist('the deletion', () => supabase.from('fin_gap_items').delete().eq('id', id));
       return { ok: true };
     },
 

@@ -27,7 +27,6 @@ export default function Ledger({ ym, preset, onEdit }: { ym: string; preset?: Le
   const [kind, setKind] = useState<TxKind | ''>(preset?.kind ?? '');
   const [account, setAccount] = useState('');
   const [category, setCategory] = useState(preset?.category ?? '');
-  const [bucket, setBucket] = useState('');
   const [scope, setScope] = useState<'month' | 'all'>(preset?.scope ?? 'month');
   const [limit, setLimit] = useState(PAGE);
   const [showTrash, setShowTrash] = useState(false);
@@ -44,14 +43,13 @@ export default function Ledger({ ym, preset, onEdit }: { ym: string; preset?: Le
       if (account && t.accountId !== account && t.toAccountId !== account) return false;
       if (category === '__none') { if (t.categoryId || (t.kind !== 'expense' && t.kind !== 'income')) return false; }
       else if (category && t.categoryId !== category) return false;
-      if (bucket && t.bucket !== bucket) return false;
       if (needle) {
         const hay = `${t.description} ${t.note ?? ''} ${catName.get(t.categoryId ?? '') ?? ''} ${accName.get(t.accountId) ?? ''} ${(t.amountPaisa / 100).toString()}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
     });
-  }, [txs, q, kind, account, category, bucket, scope, ym, catName, accName]);
+  }, [txs, q, kind, account, category, scope, ym, catName, accName]);
 
   const totals = useMemo(() => {
     let inn = 0, out = 0;
@@ -98,7 +96,7 @@ export default function Ledger({ ym, preset, onEdit }: { ym: string; preset?: Le
   const subtitle = (t: FinTx) =>
     t.kind === 'transfer' ? `${accName.get(t.accountId) ?? '?'} \u2192 ${accName.get(t.toAccountId ?? '') ?? '?'}${t.goalId ? ' \u00B7 goal' : t.bucket === 'savings' ? ' \u00B7 savings' : ''}`
     : t.loanId || t.receivableId ? `${accName.get(t.accountId) ?? '?'} \u00B7 ${linked.get(t.loanId ?? t.receivableId ?? '') ?? ''}`
-    : `${accName.get(t.accountId) ?? '?'}${t.categoryId ? ` \u00B7 ${catName.get(t.categoryId) ?? ''}` : t.kind === 'expense' || t.kind === 'income' ? ' \u00B7 Uncategorized' : ''}${t.kind === 'expense' && t.bucket ? ` \u00B7 ${t.bucket}` : ''}`;
+    : `${accName.get(t.accountId) ?? '?'}${t.categoryId ? ` \u00B7 ${catName.get(t.categoryId) ?? ''}` : t.kind === 'expense' || t.kind === 'income' ? ' \u00B7 Uncategorized' : ''}`;
   const kindTag = (t: FinTx) => (t.kind === 'expense' || t.kind === 'income' ? null : (
     <span className="rounded bg-paper px-1.5 py-px text-[10px] font-bold uppercase text-muted">{TAG[t.kind] ?? t.kind}</span>
   ));
@@ -106,7 +104,7 @@ export default function Ledger({ ym, preset, onEdit }: { ym: string; preset?: Le
   return (
     <div className="space-y-4">
       <section className={cardCls} aria-label="Ledger filters">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <input value={q} onChange={(e) => { setQ(e.target.value); setLimit(PAGE); }} placeholder="Search" aria-label="Search transactions" className={`${inputCls} lg:col-span-2`} />
           <select aria-label="Type" value={kind} onChange={(e) => setKind(e.target.value as TxKind | '')} className={inputCls}>
             <option value="">All types</option><option value="expense">Expenses</option><option value="income">Income</option>
@@ -120,9 +118,6 @@ export default function Ledger({ ym, preset, onEdit }: { ym: string; preset?: Le
           <select aria-label="Category" value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
             <option value="">All categories</option><option value="__none">Uncategorized</option>
             {categories.filter((c) => !c.archived).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <select aria-label="Bucket" value={bucket} onChange={(e) => setBucket(e.target.value)} className={inputCls}>
-            <option value="">All buckets</option><option value="needs">Needs</option><option value="wants">Wants</option><option value="savings">Savings</option>
           </select>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">

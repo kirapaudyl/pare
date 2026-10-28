@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useFinanceStore } from '../store/useFinanceStore';
 import { accountBalances, balanceTotals, goalProgress, planBudget, summarizeMonth, ymOf } from './ledger';
 import { cashForecast, computeNetWorth, dueBefore, loanStatus, receivableStatus } from './debts';
+import { computeGap, computeProjections } from './dashboard';
 import { detectRecurring, projectMonth, staleAccounts, uncategorized, unexplainedDiffs } from './insights';
 
 /** Everything on screen is computed from the ledger here, in one place. */
@@ -13,6 +14,7 @@ export function useFinanceDerived(ym: string) {
   const categories = useFinanceStore((s) => s.categories);
   const loans = useFinanceStore((s) => s.loans);
   const receivables = useFinanceStore((s) => s.receivables);
+  const gapItems = useFinanceStore((s) => s.gapItems);
 
   return useMemo(() => {
     const balances = accountBalances(accounts, txs);
@@ -33,12 +35,21 @@ export function useFinanceDerived(ym: string) {
     const projection = projectMonth(txs, summary, budget.lines, now, { bucket: settings.debtBucket, due: loanDueTotal });
     const netWorth = computeNetWorth(totals, loanList, receivableList);
     const forecast = isCurrent
-      ? cashForecast({ now, availableNow: totals.available, loans: loanList, receivables: receivableList, projection, expectedIncomePaisa: settings.expectedIncomePaisa, incomeSoFar: summary.income })
+      ? cashForecast({ now, availableNow: totals.available, loans: loanList, receivables: receivableList, projection, expectedIncomePaisa: 0, incomeSoFar: summary.income })
       : null;
+    const gap = computeGap(settings.incomeTargetPaisa, summary.income, gapItems);
+    const projections = computeProjections({
+      txs, ym, isCurrentMonth: isCurrent, availableNow: totals.available, netWorth: netWorth.netWorth,
+      spendingSoFar: summary.spendingTotal, spendingRemaining: forecast?.spendingRemaining ?? 0, loans: loanList,
+    });
+    // What you hold, by kind of account. A negative account stays visible so it can be fixed, not hidden.
+    const byType = { cash: 0, bank: 0, wallet: 0, card: 0 };
+    const negative = accounts.filter((a) => !a.archived && a.type !== 'card' && (balances.get(a.id) ?? 0) < 0);
+    for (const a of accounts) if (!a.archived) byType[a.type] += balances.get(a.id) ?? 0;
     const goalList = goals.filter((g) => !g.archived).map((g) => ({ goal: g, progress: goalProgress(g, txs) }));
     return {
       balances, totals, summary, budget, recurring, projection, goalList,
-      loanList, receivableList, loanDueThisMonth, loanDueTotal, netWorth, forecast,
+      loanList, receivableList, loanDueThisMonth, loanDueTotal, netWorth, forecast, gap, projections, byType, negative,
       loanName: new Map(loans.map((l) => [l.id, l.name])),
       receivableName: new Map(receivables.map((r) => [r.id, r.person])),
       uncategorized: uncategorized(txs),
@@ -47,5 +58,5 @@ export function useFinanceDerived(ym: string) {
       categoryName: new Map(categories.map((c) => [c.id, c.name])),
       accountName: new Map(accounts.map((a) => [a.id, a.name])),
     };
-  }, [accounts, txs, goals, settings, categories, loans, receivables, ym]);
+  }, [accounts, txs, goals, settings, categories, loans, receivables, gapItems, ym]);
 }

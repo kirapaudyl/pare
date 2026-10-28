@@ -4,9 +4,7 @@ import { useFinanceStore } from '../../store/useFinanceStore';
 import { monthLabel, shiftMonth, ymOf } from '../../finance/ledger';
 import type { FinTx, TxInput } from '../../finance/types';
 import Accounts from './Accounts';
-import Budget from './Budget';
 import Debts from './Debts';
-import Goals from './Goals';
 import Ledger, { type LedgerPreset } from './Ledger';
 import Overview from './Overview';
 import QuickAdd from './QuickAdd';
@@ -14,12 +12,12 @@ import Rules from './Rules';
 import TransactionForm from './TransactionForm';
 import { ToastProvider, btnGhost, btnPrimary, cardCls } from './ui';
 
-export type FinanceTab = 'overview' | 'ledger' | 'budget' | 'accounts' | 'debts' | 'goals' | 'rules';
+export type FinanceTab = 'overview' | 'ledger' | 'accounts' | 'debts' | 'rules';
 const TABS: { id: FinanceTab; label: string }[] = [
-  { id: 'overview', label: 'Overview' }, { id: 'ledger', label: 'Ledger' }, { id: 'budget', label: 'Budget' },
-  { id: 'accounts', label: 'Accounts' }, { id: 'debts', label: 'Loans & Receivables' }, { id: 'goals', label: 'Goals' }, { id: 'rules', label: 'Categories' },
+  { id: 'overview', label: 'Dashboard' }, { id: 'ledger', label: 'Ledger' },
+  { id: 'accounts', label: 'Accounts' }, { id: 'debts', label: 'Loans & Receivables' }, { id: 'rules', label: 'Categories' },
 ];
-const WITH_MONTH: FinanceTab[] = ['overview', 'ledger', 'budget', 'debts'];
+const WITH_MONTH: FinanceTab[] = ['overview', 'ledger', 'debts'];
 
 interface FormState { initial?: FinTx | null; preset?: Partial<TxInput> }
 
@@ -124,10 +122,8 @@ function FinanceInner() {
 
       {tab === 'overview' && <Overview ym={ym} goto={goto} onEdit={edit} />}
       {tab === 'ledger' && <Ledger key={JSON.stringify(ledgerPreset)} ym={ym} preset={ledgerPreset} onEdit={edit} />}
-      {tab === 'budget' && <Budget ym={ym} />}
       {tab === 'accounts' && <Accounts ym={ym} onTransfer={() => setForm({ preset: { kind: 'transfer' } })} onAddExpense={(preset) => setForm({ preset })} />}
       {tab === 'debts' && <Debts ym={ym} />}
-      {tab === 'goals' && <Goals ym={ym} />}
       {tab === 'rules' && <Rules />}
 
       {form && <TransactionForm key={form.initial?.id ?? JSON.stringify(form.preset ?? 'new')} initial={form.initial} preset={form.preset} onClose={() => setForm(null)} />}

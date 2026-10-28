@@ -5,8 +5,8 @@ import { formatRs, paisaToInput, parseMoney } from '../../finance/money';
 import { dayKeyOf } from '../../finance/ledger';
 import { useFinanceDerived } from '../../finance/useFinanceDerived';
 import type { LoanStatus, ReceivableStatus } from '../../finance/debts';
-import type { FinLoan, FinReceivable } from '../../finance/types';
-import { Bar, Empty, Field, Modal, btnGhost, btnPrimary, cardCls, fromLocalInput, inputCls, toLocalInput, useToast } from './ui';
+import type { FinLoan, FinReceivable, LoanKind } from '../../finance/types';
+import { Bar, Empty, Field, Modal, Segmented, btnGhost, btnPrimary, cardCls, fromLocalInput, inputCls, toLocalInput, useToast } from './ui';
 
 const niceDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 const today = () => dayKeyOf(new Date());
@@ -54,7 +54,7 @@ export default function Debts({ ym }: { ym: string }) {
           <button onClick={() => setLoanForm('new')} className={`${btnPrimary} flex items-center gap-1.5`}><Plus size={16} /> Add loan</button>
         </header>
         {d.loanList.length === 0 ? (
-          <Empty title="No loans tracked">Add a loan to see its balance, next EMI and progress, and to have upcoming EMIs reduce your projected cash.</Empty>
+          <Empty title="No loans tracked">Add a bank loan (with EMIs) or money you borrowed from a friend. Bank EMIs reduce your projected cash; friend loans have no fixed schedule.</Empty>
         ) : (
           <ul className="grid gap-4 lg:grid-cols-2">
             {d.loanList.map((s) => <LoanCard key={s.loan.id} s={s} onPay={() => setPaying(s)} onEdit={() => setLoanForm(s.loan)} />)}
@@ -103,6 +103,7 @@ function LoanCard({ s, onPay, onEdit }: { s: LoanStatus; onPay: () => void; onEd
   const toast = useToast();
   const [showAll, setShowAll] = useState(false);
   const { loan, next } = s;
+  const friend = loan.kind === 'personal';
   const accName = new Map(accounts.map((a) => [a.id, a.name]));
   const shown = showAll ? s.payments : s.payments.slice(0, 3);
 
@@ -111,22 +112,39 @@ function LoanCard({ s, onPay, onEdit }: { s: LoanStatus; onPay: () => void; onEd
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate font-display text-lg font-bold">{loan.name}</h3>
-          <p className="text-xs text-muted">{loan.lender ? `${loan.lender} \u00B7 ` : ''}EMI {formatRs(loan.emiPaisa)}</p>
+          <p className="text-xs text-muted">
+            {friend ? `${loan.lender ? `From ${loan.lender} \u00B7 ` : ''}no fixed schedule` : `${loan.lender ? `${loan.lender} \u00B7 ` : ''}EMI ${formatRs(loan.emiPaisa ?? 0)}`}
+          </p>
         </div>
-        {s.paidOff ? <Badge tone="green">Paid off</Badge> : next && (next.overdue ? <Badge tone="red">{dueText(next.dueInDays)}</Badge> : next.dueInDays <= 7 ? <Badge tone="amber">{dueText(next.dueInDays)}</Badge> : null)}
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge tone="grey">{friend ? 'Friend / family' : 'Bank'}</Badge>
+          {s.paidOff ? <Badge tone="green">Paid off</Badge>
+            : friend && s.returnBy ? (s.returnBy.overdue ? <Badge tone="red">return {dueText(s.returnBy.dueInDays)}</Badge> : s.returnBy.dueInDays <= 7 ? <Badge tone="amber">return {dueText(s.returnBy.dueInDays)}</Badge> : null)
+            : next && (next.overdue ? <Badge tone="red">{dueText(next.dueInDays)}</Badge> : next.dueInDays <= 7 ? <Badge tone="amber">{dueText(next.dueInDays)}</Badge> : null)}
+        </div>
       </div>
 
       <p className="mt-3 font-display text-3xl font-bold">{formatRs(s.outstanding)} <span className="text-base font-normal text-muted">still owed</span></p>
-      <div className="my-3"><Bar ratio={s.progressPct / 100} state={s.paidOff ? 'met' : next?.overdue ? 'warn' : 'ok'} /></div>
-      <p className="text-sm text-muted">
-        {s.emisPaid} of {s.emisTotal} EMIs paid &middot; {s.emisLeft} left
-        {loan.originalPaisa ? <> &middot; {s.progressPct}% of {formatRs(loan.originalPaisa)} repaid</> : null}
-      </p>
-      {next && <p className="mt-1 text-sm">Next: <b>{formatRs(next.amountPaisa)}</b> on {niceDate(next.dueDate)}</p>}
+      <div className="my-3"><Bar ratio={s.progressPct / 100} state={s.paidOff ? 'met' : (friend ? s.returnBy?.overdue : next?.overdue) ? 'warn' : 'ok'} /></div>
+
+      {friend ? (
+        <p className="text-sm text-muted">
+          {formatRs(s.paidSinceOpening)} paid back so far &middot; {s.progressPct}% repaid
+          {loan.returnBy && !s.paidOff && <> &middot; hoping to return by {niceDate(loan.returnBy)}</>}
+        </p>
+      ) : (
+        <>
+          <p className="text-sm text-muted">
+            {s.emisPaid} of {s.emisTotal} EMIs paid &middot; {s.emisLeft} left
+            {loan.originalPaisa ? <> &middot; {s.progressPct}% of {formatRs(loan.originalPaisa)} repaid</> : null}
+          </p>
+          {next && <p className="mt-1 text-sm">Next: <b>{formatRs(next.amountPaisa)}</b> on {niceDate(next.dueDate)}</p>}
+        </>
+      )}
       {loan.note && <p className="mt-1 text-xs text-muted">{loan.note}</p>}
 
       <div className="mt-4 flex flex-wrap gap-2 text-sm font-semibold">
-        <button onClick={onPay} disabled={s.paidOff} className={`${btnPrimary} h-9`}>Pay EMI</button>
+        <button onClick={onPay} disabled={s.paidOff} className={`${btnPrimary} h-9`}>{friend ? 'Pay back' : 'Pay EMI'}</button>
         <button onClick={onEdit} className="rounded-lg px-3 text-muted hover:text-ink">Edit</button>
         {s.paidOff && <button onClick={() => { const r = archiveLoan(loan.id, true); if (!r.ok) toast(r.error); }} className="rounded-lg px-3 text-muted hover:text-ink">Archive</button>}
       </div>
@@ -206,12 +224,15 @@ function LoanForm({ initial, onClose }: { initial: FinLoan | null; onClose: () =
   const hasPayments = useFinanceStore((s) => !!initial && s.txs.some((t) => t.kind === 'loan_payment' && t.loanId === initial.id));
   const toast = useToast();
 
+  const [kind, setKind] = useState<LoanKind>(initial?.kind ?? 'bank');
+  const friend = kind === 'personal';
   const [name, setName] = useState(initial?.name ?? '');
   const [lender, setLender] = useState(initial?.lender ?? '');
   const [owed, setOwed] = useState(initial ? paisaToInput(initial.openingOutstandingPaisa) : '');
   const [asOf, setAsOf] = useState(initial?.openingDate ?? today());
-  const [emi, setEmi] = useState(initial ? paisaToInput(initial.emiPaisa) : '');
+  const [emi, setEmi] = useState(initial?.emiPaisa ? paisaToInput(initial.emiPaisa) : '');
   const [nextDue, setNextDue] = useState(initial?.firstDueOn ?? '');
+  const [returnBy, setReturnBy] = useState(initial?.returnBy ?? '');
   const [paidBefore, setPaidBefore] = useState(String(initial?.emisPaidBefore ?? 0));
   const [original, setOriginal] = useState(initial?.originalPaisa ? paisaToInput(initial.originalPaisa) : '');
   const [note, setNote] = useState(initial?.note ?? '');
@@ -220,15 +241,22 @@ function LoanForm({ initial, onClose }: { initial: FinLoan | null; onClose: () =
   const [error, setError] = useState<string | null>(null);
 
   const submit = () => {
-    const o = parseMoney(owed), e = parseMoney(emi), orig = optMoney(original);
+    const o = parseMoney(owed), orig = optMoney(original);
     if (!o.ok) { setError(`Amount still owed: ${o.error}`); return; }
-    if (!e.ok) { setError(`EMI: ${e.error}`); return; }
-    if (orig && !orig.ok) { setError(`Total loan amount: ${orig.error}`); return; }
-    if (!/^\d+$/.test(paidBefore.trim() || '0')) { setError('EMIs already paid must be a whole number'); return; }
-    const v = {
-      name, lender: lender.trim() || null, openingOutstandingPaisa: o.paisa, openingDate: asOf, emiPaisa: e.paisa, firstDueOn: nextDue,
-      emisPaidBefore: Number(paidBefore || 0), originalPaisa: orig && orig.ok ? orig.paisa : null, note: note.trim() || null,
-    };
+    if (orig && !orig.ok) { setError(`Total ${friend ? 'borrowed' : 'loan amount'}: ${orig.error}`); return; }
+    const common = { lender: lender.trim() || null, openingOutstandingPaisa: o.paisa, openingDate: asOf, originalPaisa: orig && orig.ok ? orig.paisa : null, note: note.trim() || null };
+
+    let v: Omit<FinLoan, 'id' | 'archived'>;
+    if (friend) {
+      const who = lender.trim();
+      if (!who) { setError('Enter who lent you the money'); return; }
+      v = { ...common, kind: 'personal', name: name.trim() || `Loan from ${who}`, emiPaisa: null, firstDueOn: null, returnBy: returnBy || null, emisPaidBefore: 0 };
+    } else {
+      const e = parseMoney(emi);
+      if (!e.ok) { setError(`EMI: ${e.error}`); return; }
+      if (!/^\d+$/.test(paidBefore.trim() || '0')) { setError('EMIs already paid must be a whole number'); return; }
+      v = { ...common, kind: 'bank', name, emiPaisa: e.paisa, firstDueOn: nextDue || null, returnBy: null, emisPaidBefore: Number(paidBefore || 0) };
+    }
     const r = initial ? updateLoan(initial.id, v) : addLoan({ ...v, receivedInto: isNew ? receivedInto : null });
     if (!r.ok) { setError(r.error); return; }
     onClose();
@@ -237,31 +265,60 @@ function LoanForm({ initial, onClose }: { initial: FinLoan | null; onClose: () =
   return (
     <Modal open onClose={onClose} title={initial ? 'Edit loan' : 'Add a loan'} wide>
       <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="space-y-4">
+        {!initial ? (
+          <div>
+            <p className="mb-1 text-sm font-semibold">Who is it from?</p>
+            <Segmented label="Loan type" value={kind} onChange={(k) => { setKind(k); setError(null); }} options={[{ id: 'bank', label: 'Bank or lender (EMIs)' }, { id: 'personal', label: 'Friend or family' }]} />
+            <p className="mt-1 text-xs text-muted">{friend ? 'No EMIs and no fixed date. You pay back whatever you can, whenever you can.' : 'Repaid in EMIs on a monthly due date.'}</p>
+          </div>
+        ) : (
+          <p className="text-sm text-muted">{friend ? 'Loan from a friend or family' : 'Bank loan (EMIs)'}</p>
+        )}
+
+        {friend ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Who lent you the money"><input autoFocus value={lender} onChange={(e) => setLender(e.target.value)} maxLength={80} placeholder="Ravi" className={inputCls} /></Field>
+            <Field label="Name (optional)" hint="Shown in lists. Defaults to Loan from Ravi."><input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} className={inputCls} /></Field>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Loan name"><input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Nabil Fone Loan" className={inputCls} /></Field>
+            <Field label="Lender (optional)"><input value={lender} onChange={(e) => setLender(e.target.value)} placeholder="Nabil Bank" className={inputCls} /></Field>
+          </div>
+        )}
+
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Loan name"><input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="Nabil Fone Loan" className={inputCls} /></Field>
-          <Field label="Lender (optional)"><input value={lender} onChange={(e) => setLender(e.target.value)} placeholder="Nabil Bank" className={inputCls} /></Field>
+          <Field label="Still owed (Rs)" hint={friend ? 'What you owe them right now.' : 'The whole remaining balance you must pay back.'}><input inputMode="decimal" value={owed} onChange={(e) => setOwed(e.target.value)} className={inputCls} /></Field>
+          <Field label={friend ? 'Borrowed on' : 'Balance is as of'} hint="Payments from this date on reduce it."><input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className={inputCls} /></Field>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Still owed (Rs)" hint="The whole remaining balance you must pay back."><input inputMode="decimal" value={owed} onChange={(e) => setOwed(e.target.value)} className={inputCls} /></Field>
-          <Field label="Balance is as of" hint="Payments from this date on reduce it."><input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className={inputCls} /></Field>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="EMI (Rs)"><input inputMode="decimal" value={emi} onChange={(e) => setEmi(e.target.value)} className={inputCls} /></Field>
-          <Field
-            label={hasPayments ? 'First EMI due on (after balance date)' : 'Next EMI due on'}
-            hint={hasPayments ? 'Your next EMI is worked out from this date and the payments you have recorded. Only change it to move the monthly due day.' : 'Later EMIs fall on the same day each month.'}
-          >
-            <input type="date" value={nextDue} onChange={(e) => setNextDue(e.target.value)} className={inputCls} />
-          </Field>
-          <Field label="EMIs already paid"><input inputMode="numeric" value={paidBefore} onChange={(e) => setPaidBefore(e.target.value.replace(/\D/g, ''))} className={inputCls} /></Field>
-        </div>
-        <Field label="Total loan amount (optional)" hint="If you enter it, progress is shown in rupees. Otherwise it is counted in EMIs."><input inputMode="decimal" value={original} onChange={(e) => setOriginal(e.target.value)} className={inputCls} /></Field>
+
+        {friend ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Return by (optional)" hint="Only a reminder. There is no fixed schedule."><input type="date" value={returnBy} onChange={(e) => setReturnBy(e.target.value)} className={inputCls} /></Field>
+            <Field label="Total borrowed (optional)" hint="If you have already paid some back before today."><input inputMode="decimal" value={original} onChange={(e) => setOriginal(e.target.value)} className={inputCls} /></Field>
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="EMI (Rs)"><input inputMode="decimal" value={emi} onChange={(e) => setEmi(e.target.value)} className={inputCls} /></Field>
+              <Field
+                label={hasPayments ? 'First EMI due on (after balance date)' : 'Next EMI due on'}
+                hint={hasPayments ? 'Your next EMI is worked out from this date and the payments you have recorded. Only change it to move the monthly due day.' : 'Later EMIs fall on the same day each month.'}
+              >
+                <input type="date" value={nextDue} onChange={(e) => setNextDue(e.target.value)} className={inputCls} />
+              </Field>
+              <Field label="EMIs already paid"><input inputMode="numeric" value={paidBefore} onChange={(e) => setPaidBefore(e.target.value.replace(/\D/g, ''))} className={inputCls} /></Field>
+            </div>
+            <Field label="Total loan amount (optional)" hint="If you enter it, progress is shown in rupees. Otherwise it is counted in EMIs."><input inputMode="decimal" value={original} onChange={(e) => setOriginal(e.target.value)} className={inputCls} /></Field>
+          </>
+        )}
+
         <Field label="Note"><input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} className={inputCls} /></Field>
 
         {!initial && (
           <div className="space-y-3 rounded-xl bg-paper p-3">
-            <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={isNew} onChange={(e) => setIsNew(e.target.checked)} className="h-4 w-4 accent-[#12141F]" /> I just borrowed this and the money arrived in an account</label>
-            <p className="text-xs text-muted">Leave this off for a loan you were already repaying. The cash for it came in long ago and is already in your balances.</p>
+            <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={isNew} onChange={(e) => setIsNew(e.target.checked)} className="h-4 w-4 accent-[#12141F]" /> {friend ? 'They just gave me this money (cash or transfer)' : 'I just borrowed this and the money arrived in an account'}</label>
+            <p className="text-xs text-muted">{friend ? 'Tick it if the money has not been entered anywhere yet. It goes into the account you pick. It is a loan, not income.' : 'Leave this off for a loan you were already repaying. The cash for it came in long ago and is already in your balances.'}</p>
             {isNew && <Field label="Money arrived in"><select value={receivedInto} onChange={(e) => setReceivedInto(e.target.value)} className={inputCls}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field>}
           </div>
         )}
@@ -344,7 +401,8 @@ function PayDialog({ s, onClose }: { s: LoanStatus; onClose: () => void }) {
   const payLoan = useFinanceStore((st) => st.payLoan);
   const { accounts, first } = useAccountDefault();
   const toast = useToast();
-  const [amount, setAmount] = useState(s.next ? paisaToInput(s.next.amountPaisa) : '');
+  const friend = s.loan.kind === 'personal';
+  const [amount, setAmount] = useState(!friend && s.next ? paisaToInput(s.next.amountPaisa) : '');
   const [account, setAccount] = useState(first);
   const [when, setWhen] = useState(toLocalInput(new Date()));
   const [note, setNote] = useState('');
@@ -357,22 +415,30 @@ function PayDialog({ s, onClose }: { s: LoanStatus; onClose: () => void }) {
     if (!occurredAt) { setError('Date is not valid'); return; }
     const r = payLoan(s.loan.id, { accountId: account, amountPaisa: a.paisa, occurredAt, note });
     if (!r.ok) { setError(r.error); return; }
-    toast(`Paid ${formatRs(a.paisa)} toward ${s.loan.name}`);
+    toast(`Paid ${formatRs(a.paisa)} ${friend ? 'back to' : 'toward'} ${s.loan.lender || s.loan.name}`);
     onClose();
   };
 
   return (
-    <Modal open onClose={onClose} title={`Pay ${s.loan.name}`}>
+    <Modal open onClose={onClose} title={friend ? `Pay back ${s.loan.lender || s.loan.name}` : `Pay ${s.loan.name}`}>
       <form onSubmit={(e) => { e.preventDefault(); submit(); }} className="space-y-4">
-        <p className="text-sm text-muted">{s.next ? `Next EMI: ${formatRs(s.next.amountPaisa)}, ${dueText(s.next.dueInDays)} (${niceDate(s.next.dueDate)}). ` : ''}Still owed: {formatRs(s.outstanding)}. This is a loan payment, so it is not counted as an expense.</p>
-        <Field label="Amount (Rs)"><input autoFocus inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} className={inputCls} /></Field>
+        <p className="text-sm text-muted">
+          {friend
+            ? `Any amount, any time. Still owed: ${formatRs(s.outstanding)}.`
+            : `${s.next ? `Next EMI: ${formatRs(s.next.amountPaisa)}, ${dueText(s.next.dueInDays)} (${niceDate(s.next.dueDate)}). ` : ''}Still owed: ${formatRs(s.outstanding)}.`}
+          {' '}This is a loan payment, so it is not counted as an expense.
+        </p>
+        <Field label="Amount (Rs)">
+          <input autoFocus inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={friend ? 'e.g. 500' : undefined} className={inputCls} />
+        </Field>
+        {friend && <button type="button" onClick={() => setAmount(paisaToInput(s.outstanding))} className="text-sm font-semibold text-muted hover:text-ink">Pay it all ({formatRs(s.outstanding)})</button>}
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Paid from"><select value={account} onChange={(e) => setAccount(e.target.value)} className={inputCls}>{accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field>
           <Field label="When"><input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} className={inputCls} /></Field>
         </div>
         <Field label="Note"><input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} className={inputCls} /></Field>
         {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-        <div className="flex gap-3"><button type="submit" className={btnPrimary}>Record payment</button><button type="button" onClick={onClose} className={btnGhost}>Cancel</button></div>
+        <div className="flex gap-3"><button type="submit" className={btnPrimary}>{friend ? 'Record payment' : 'Record payment'}</button><button type="button" onClick={onClose} className={btnGhost}>Cancel</button></div>
       </form>
     </Modal>
   );

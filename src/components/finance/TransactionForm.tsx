@@ -10,7 +10,6 @@ type FormKind = 'expense' | 'income' | 'transfer' | 'refund';
 const KINDS: { id: FormKind; label: string }[] = [
   { id: 'expense', label: 'Expense' }, { id: 'income', label: 'Income' }, { id: 'transfer', label: 'Transfer' }, { id: 'refund', label: 'Refund' },
 ];
-const BUCKETS: { id: Bucket; label: string }[] = [{ id: 'needs', label: 'Needs' }, { id: 'wants', label: 'Wants' }, { id: 'savings', label: 'Savings' }];
 const ACCOUNT_LABEL: Partial<Record<TxKind, string>> = { expense: 'Paid from', income: 'Received in', transfer: 'From', refund: 'Refunded to', loan_payment: 'Paid from', loan_received: 'Received in', lend: 'Lent from', collection: 'Received in' };
 
 interface Props {
@@ -23,7 +22,6 @@ export default function TransactionForm({ onClose, initial, preset }: Props) {
   const accounts = useFinanceStore((s) => s.accounts);
   const categories = useFinanceStore((s) => s.categories);
   const txs = useFinanceStore((s) => s.txs);
-  const goals = useFinanceStore((s) => s.goals);
   const defaultAccountId = useFinanceStore((s) => s.settings.defaultAccountId);
   const addTx = useFinanceStore((s) => s.addTx);
   const updateTx = useFinanceStore((s) => s.updateTx);
@@ -40,10 +38,8 @@ export default function TransactionForm({ onClose, initial, preset }: Props) {
   const [accountId, setAccountId] = useState(base.accountId ?? defaultAccountId ?? liveAccounts[0]?.id ?? '');
   const [toAccountId, setToAccountId] = useState(base.toAccountId ?? '');
   const [categoryId, setCategoryId] = useState(base.categoryId ?? '');
-  const [bucket, setBucket] = useState<Bucket>(base.bucket ?? 'wants');
+  const [bucket, setBucket] = useState<Bucket>(base.bucket ?? 'wants');   // follows the category; kept so existing entries are never changed by editing
   const [refundOf, setRefundOf] = useState(base.refundOf ?? '');
-  const [isSaving, setIsSaving] = useState(base.bucket === 'savings' && base.kind === 'transfer');
-  const [goalId, setGoalId] = useState(base.goalId ?? '');
   const [note, setNote] = useState(base.note ?? '');
   const [error, setError] = useState<string | null>(null);
 
@@ -76,7 +72,6 @@ export default function TransactionForm({ onClose, initial, preset }: Props) {
 
   const catKind = kind === 'income' ? 'income' : 'expense';
   const catOptions = categories.filter((c) => c.kind === catKind && (!c.archived || c.id === categoryId));
-  const activeGoals = goals.filter((g) => !g.archived || g.id === goalId);
 
   const save = () => {
     const parsed = parseMoney(amount);
@@ -87,7 +82,9 @@ export default function TransactionForm({ onClose, initial, preset }: Props) {
     const common = { amountPaisa: parsed.paisa, occurredAt, description: description.trim(), accountId, note: note.trim() || null, loanId: null, receivableId: null };
     let input: TxInput;
     if (kind === 'transfer') {
-      input = { ...common, kind, toAccountId: toAccountId || null, categoryId: null, bucket: isSaving ? 'savings' : null, refundOf: null, goalId: isSaving && goalId ? goalId : null };
+      // An older savings-goal transfer keeps its tags when you edit it; new transfers are plain moves between your accounts.
+      const old = initial?.kind === 'transfer' ? initial : null;
+      input = { ...common, kind, toAccountId: toAccountId || null, categoryId: null, bucket: old?.bucket ?? null, refundOf: null, goalId: old?.goalId ?? null };
     } else if (kind === 'refund') {
       input = original
         ? { ...common, kind, toAccountId: null, categoryId: original.categoryId, bucket: original.bucket, refundOf: original.id, goalId: null }
@@ -178,29 +175,8 @@ export default function TransactionForm({ onClose, initial, preset }: Props) {
           )}
         </div>
 
-        {(kind === 'expense' || (kind === 'refund' && !original)) && (
-          <div><p className="mb-1 text-sm font-semibold">Budget bucket</p><Segmented label="Budget bucket" value={bucket} onChange={setBucket} options={BUCKETS} /></div>
-        )}
         {kind === 'refund' && original && (
           <p className="rounded-lg bg-paper px-3 py-2 text-sm text-muted">Counts against the same category and bucket as the original expense.</p>
-        )}
-
-        {kind === 'transfer' && (
-          <div className="space-y-3 rounded-xl bg-paper p-3">
-            <label className="flex items-center gap-2 text-sm font-semibold">
-              <input type="checkbox" checked={isSaving} onChange={(e) => setIsSaving(e.target.checked)} className="h-4 w-4 accent-[#12141F]" />
-              This is a savings contribution
-            </label>
-            <p className="text-xs text-muted">Moves money between your accounts without counting as spending. Savings contributions count toward the Savings bucket.</p>
-            {isSaving && activeGoals.length > 0 && (
-              <Field label="Savings goal (optional)">
-                <select value={goalId} onChange={(e) => { setGoalId(e.target.value); const g = goals.find((x) => x.id === e.target.value); if (g?.accountId && !toAccountId) setToAccountId(g.accountId); }} className={inputCls}>
-                  <option value="">No goal</option>
-                  {activeGoals.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
-              </Field>
-            )}
-          </div>
         )}
 
         <Field label="Note"><input value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} className={inputCls} /></Field>

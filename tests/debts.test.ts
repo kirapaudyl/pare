@@ -22,8 +22,8 @@ const tx = (p: Partial<FinTx> & Pick<FinTx, 'kind' | 'amountPaisa' | 'accountId'
 
 // The loan from the request: 2 EMIs already paid, Rs 21,000 still owed. (The EMI and due date are examples; the real ones are entered in the app.)
 const fone: FinLoan = {
-  id: 'fone', name: 'Nabil Fone Loan', lender: 'Nabil Bank', openingOutstandingPaisa: rs(21000), openingDate: '2026-10-19',
-  emiPaisa: rs(3500), firstDueOn: '2026-11-05', emisPaidBefore: 2, originalPaisa: null, note: null, archived: false,
+  id: 'fone', name: 'Nabil Fone Loan', lender: 'Nabil Bank', kind: 'bank', openingOutstandingPaisa: rs(21000), openingDate: '2026-10-19',
+  emiPaisa: rs(3500), firstDueOn: '2026-11-05', returnBy: null, emisPaidBefore: 2, originalPaisa: null, note: null, archived: false,
 };
 const friend: FinReceivable = { id: 'r1', person: 'Ram', amountPaisa: rs(10000), lentOn: '2026-09-01', expectedOn: '2026-10-25', note: null, writtenOffPaisa: 0, archived: false };
 const settings = (p: Partial<FinSettings> = {}): FinSettings => ({ ...DEFAULT_SETTINGS, ...p });
